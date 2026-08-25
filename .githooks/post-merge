@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Install dependencies a pull introduced.
+#
+# `omarchy plugin update` ends in `git merge --ff-only FETCH_HEAD`, and git runs
+# post-merge on a fast-forward, so this fires on exactly the event that can add
+# a new dependency to the table without adding the program to the machine.
+#
+# Tracked in .githooks rather than .git/hooks so it survives a fresh clone;
+# scripts/setup.sh points core.hooksPath here. Deliberately never runs sudo
+# itself: it opens the installer in a terminal, where a password prompt has
+# somewhere to appear and the user can still say no.
+set -uo pipefail
+
+repo_dir="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+checker="$repo_dir/scripts/dependencies.sh"
+[[ -x $checker ]] || exit 0
+
+missing="$("$checker" --check)" && exit 0
+[[ -n $missing ]] || exit 0
+
+count=$(printf '%s\n' "$missing" | grep -c .)
+summary=$(printf '%s' "$missing" | tr '\n' ' ')
+
+if command -v notify-send >/dev/null 2>&1; then
+  notify-send --app-name="Nearby Share" \
+    "Nearby Share: $count missing dependenc$([[ $count == 1 ]] && echo y || echo ies)" \
+    "Installing: ${summary% }"
+fi
+
+# A pull is not necessarily happening in a terminal the user is watching, so
+# ask for one rather than assuming this stdout is visible.
+if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then
+  setsid omarchy-launch-floating-terminal-with-presentation \
+    "bash '$checker' --install" >/dev/null 2>&1 &
+elif [[ -t 1 ]]; then
+  "$checker" --install
+elif command -v xdg-terminal-exec >/dev/null 2>&1; then
+  setsid xdg-terminal-exec bash "$checker" --install >/dev/null 2>&1 &
+fi
+
+exit 0

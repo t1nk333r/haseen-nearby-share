@@ -1,16 +1,125 @@
-# Omarchy Nearby
+# Nearby Share
 
-Native nearby sharing for Omarchy Quattro, compatible with the LocalSend protocol.
+LocalSend and Google Quick Share in one Omarchy panel, switched by two buttons
+at the top.
 
-Nearby turns LocalSend-compatible sharing into a native shell feature: open it
-from the bar, choose a device, and send files or clipboard text without launching
-a separate application.
+> **This is a fork.** The LocalSend engine, the Rust helper and the panel it
+> lives in are [jfg96/omarchy-nearby](https://github.com/jfg96/omarchy-nearby)
+> (MIT), unchanged except where noted below. What this fork adds is the Quick
+> Share pane, the mode switcher, dependency installation on pull, and the
+> firewall script. Upstream is kept as a git remote so fixes can be rebased in.
+>
+> Independent project. Not affiliated with or endorsed by LocalSend, Google or
+> Omarchy.
 
-Nearby is not a launcher for the LocalSend application. It implements the network
-peer inside a Quickshell widget: discovery, sending, receiving, approval, progress,
-clipboard text and transfer lifecycle are handled by the widget and its Rust helper.
+## What the fork adds
 
-> Independent project. Not affiliated with or endorsed by LocalSend or Omarchy.
+- **Two panes, one widget.** A LocalSend pane (upstream's, native, unchanged)
+  and a Quick Share pane, selected by two buttons under the header. The choice
+  persists in `shell.json` and applies to every monitor.
+- **Quick Share sending** — device discovery, file send, the phone's
+  confirmation PIN, and transfer progress.
+- **Dependencies installed on pull** — a tracked `post-merge` hook notices when
+  an update introduced a program the machine does not have, and opens an
+  installer in a terminal.
+- **Firewall rules** — one script for both protocols, `ufw` and `firewalld`.
+
+## Quick Share: how it works, and what it cannot do
+
+Quick Share has no library this plugin can embed the way LocalSend does.
+[rquickshare](https://github.com/Martichou/rquickshare) is a Tauri app that
+ignores `argv`, and `rqs_lib` is a library rather than a daemon. This pane
+therefore drives [`martinalderson/qs`](https://github.com/martinalderson/qs), a
+CLI over a fork of `rqs_lib`, as short-lived subprocesses.
+
+`qs` is **GPL-3.0**. It is not vendored, redistributed or linked here -- it is
+built from source on your machine by `scripts/dependencies.sh` and executed as
+a separate program. This repository stays MIT.
+
+**Sending works. Receiving is not offered.** `qs receive` refuses to run
+without a TTY unless given `--yes`, which auto-accepts every inbound transfer
+on the network with no chance to decline. Rather than ship that behind a
+toggle, the pane sends only. Receiving needs a `qs` that can report an incoming
+request as an event and take an accept/decline answer back; until then, use the
+LocalSend pane, which has a real consent prompt.
+
+Quick Share also sends files only. `rqs_lib` can carry text, but the CLI
+exposes no way to hand it any -- use LocalSend for clipboard text.
+
+### The binary is not called `qs`
+
+`/usr/bin/qs` is Quickshell's own CLI, shipped by the package the whole Omarchy
+shell runs on. Installing this `qs` onto `PATH` either shadows Quickshell's
+binary or is shadowed by it, and both fail silently. The build therefore
+installs it as `bin/nearby-qs` and every caller uses that absolute path.
+
+## Install
+
+```sh
+git clone https://github.com/OWNER/REPO.git \
+  ~/.config/omarchy/plugins/t1nk33r.nearby-share
+cd ~/.config/omarchy/plugins/t1nk33r.nearby-share
+./scripts/setup.sh          # hooks + dependencies
+omarchy plugin enable t1nk33r.nearby-share
+```
+
+`setup.sh` points `core.hooksPath` at the tracked `.githooks` directory, which
+is what makes the install-on-pull hook survive a fresh clone.
+
+The LocalSend helper is a release asset of upstream, not of this fork. Fetch it
+with upstream's installer or build it with `./build.sh` (needs Rust).
+
+### Dependencies
+
+Everything except the Rust toolchain is usually already present on Omarchy:
+
+```sh
+sudo pacman -S --needed rustup protobuf base-devel pkgconf dbus \
+                        bluez bluez-libs bluez-utils wl-clipboard libnotify
+rustup default stable
+```
+
+`protobuf` is needed because `rqs_lib`'s `build.rs` compiles its `.proto` files
+at build time. `bluez` is needed because Quick Share discovery uses Bluetooth
+LE. `scripts/dependencies.sh --json` reports what is missing and
+`--install` installs it.
+
+## Firewall
+
+`scripts/setup_firewall.sh` opens four rules:
+
+| Port | Why |
+|------|-----|
+| `53317/tcp` | LocalSend transfers |
+| `53317/udp` | LocalSend discovery |
+| `5353/udp`  | mDNS, used by both protocols |
+| `53318/tcp` | Quick Share transfers |
+
+Quick Share normally binds an ephemeral port, which would mean opening the
+whole high range to the LAN. `qs --port` pins it instead, and the plugin always
+passes that flag, so one port is enough. Bluetooth LE discovery does not pass
+through the firewall and needs no rule.
+
+## IPC
+
+```sh
+omarchy-shell t1nk33r.nearby-share mode              # localsend | quickshare
+omarchy-shell t1nk33r.nearby-share quickshare        # switch pane
+omarchy-shell t1nk33r.nearby-share localsend
+omarchy-shell t1nk33r.nearby-share quickshareStatus  # deps + device count
+omarchy-shell t1nk33r.nearby-share status            # LocalSend engine
+```
+
+Changing an `IpcHandler`'s methods needs `omarchy restart shell`; the method
+table binds at registration and a hot-reload does not rebuild it. QML and
+`shell.json` changes hot-reload normally.
+
+## Upstream documentation
+
+Everything below is upstream's, describing the LocalSend engine this fork
+builds on. It is accurate for the LocalSend pane.
+
+---
 
 ## Screenshots
 

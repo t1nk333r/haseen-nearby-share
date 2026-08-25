@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
-  "id": "oma.nearby",
-  "name": "Nearby",
+  "id": "t1nk33r.nearby-share",
+  "name": "Nearby Share",
   "version": "1.2.0",
   "minHelperVersion": "1.2.0",
-  "author": "jfg96",
-  "description": "Native nearby sharing compatible with the LocalSend protocol",
+  "author": "t1nk33r",
+  "description": "LocalSend and Quick Share in one panel, switched by two buttons",
+  "homepage": "https://github.com/jfg96/omarchy-nearby",
   "kinds": [
     "service",
     "bar-widget"
@@ -15,10 +16,22 @@
     "barWidget": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "Nearby",
-    "description": "Send and receive with nearby devices",
+    "displayName": "Nearby Share",
+    "description": "Send and receive over LocalSend or Quick Share",
     "category": "Network",
     "allowMultiple": false,
     "defaultSection": "right"
+  },
+  "settings": {
+    "receiverEnabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Run the LocalSend receiver"
+    },
+    "mode": {
+      "type": "string",
+      "default": "localsend",
+      "description": "Which pane opens first: localsend or quickshare"
+    }
   }
 }

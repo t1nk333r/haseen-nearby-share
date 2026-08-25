@@ -24,7 +24,7 @@ Item {
   property var manifest: null
   property string omarchyPath: Quickshell.env("OMARCHY_PATH") || ""
 
-  readonly property string manifestPluginId: "oma.nearby"
+  readonly property string manifestPluginId: "t1nk33r.nearby-share"
   readonly property string metadataSourceDir: manifest && manifest.__sourceDir
     ? String(manifest.__sourceDir)
     : ""
@@ -55,6 +55,12 @@ Item {
   readonly property string moduleEntryId: configEntry ? configEntry.id : manifestPluginId
   readonly property var pluginSettings: configEntry ? configEntry.settings : ({})
   readonly property bool receiverEnabled: Model.receiverEnabledIn(configEntry)
+  // Which of the two panes is showing. Read from the same config entry as
+  // receiverEnabled so the persisted value and the effective value cannot
+  // drift, and so the choice survives a shell restart.
+  readonly property string mode: Model.modeIn(configEntry)
+  readonly property bool quickShareMode: mode === "quickshare"
+  readonly property var quickshare: quickShareEngine
 
   property string pluginVersion: ""
   property string minHelperVersion: ""
@@ -181,13 +187,24 @@ Item {
   }
 
   IpcHandler {
-    target: "oma.nearby"
+    target: "t1nk33r.nearby-share"
     function open(): string { return root.summonView("summon") }
     function close(): string { return root.summonView("hide") }
     function toggle(): string { return root.summonView("toggle") }
     function receiverOn(): string { if (!root.receiverEnabled) root.toggleReceiver(); return "ok" }
     function receiverOff(): string { if (root.receiverEnabled) root.toggleReceiver(); return "ok" }
     function receiverToggle(): string { root.toggleReceiver(); return "ok" }
+    // The pane switch, for a keybinding or a script. `mode` with no argument
+    // reports; the two named methods select.
+    function mode(): string { return root.mode }
+    function localsend(): string { root.setMode("localsend"); return "ok" }
+    function quickshare(): string { root.setMode("quickshare"); return "ok" }
+    // Quick Share has no resident process to ask, so this reports what the
+    // last dependency probe found rather than a live connection.
+    function quickshareStatus(): string {
+      return JSON.stringify({available:quickShareEngine.available,checked:quickShareEngine.depsChecked,
+        missing:quickShareEngine.missingDeps,devices:quickShareEngine.devices.length,state:quickShareEngine.viewState})
+    }
     // The same repair the panel button runs, for a shell whose bar is not
     // where the user is looking when the helper stops matching.
     function retryHelper(): string { if (root.helperUpdating) return "busy"; root.startHelperUpdate(); return "ok" }
@@ -200,6 +217,11 @@ Item {
   function viewOpened() {
     openViewCount++
     if (openViewCount !== 1) return
+    if (quickShareMode) {
+      quickShareEngine.refreshDependencies()
+      if (quickShareEngine.available && quickShareEngine.viewState === "nearby") quickShareEngine.scan()
+      return
+    }
     if (viewState === "nearby" && receiverEnabled && backendReady) startDiscovery()
   }
   function viewClosed() {
@@ -266,6 +288,32 @@ Item {
     }
     shell.updateEntryInline(moduleEntryId, settings)
   }
+  function persistMode(next) {
+    if (!shell) return
+    var settings = Object.assign({}, pluginSettings, { mode: next })
+    if (Model.hasStringBarEntry(shell.shellConfig, moduleEntryId)
+        && typeof shell.mutateShellConfig === "function") {
+      shell.mutateShellConfig(function(config) {
+        Model.promoteStringBarEntry(config, moduleEntryId, settings)
+      })
+      return
+    }
+    shell.updateEntryInline(moduleEntryId, settings)
+  }
+  // Switching panes abandons neither transfer: the LocalSend helper keeps
+  // receiving while the Quick Share pane is showing, and a `qs send` in flight
+  // survives a switch back. Only the cursor and the per-pane target reset.
+  function setMode(next) {
+    var wanted = next === "quickshare" ? "quickshare" : "localsend"
+    if (wanted === mode) return
+    persistMode(wanted)
+    cursorRequested(0)
+    if (wanted === "quickshare") {
+      quickShareEngine.refreshDependencies()
+      if (anyViewOpen && quickShareEngine.available) quickShareEngine.scan()
+    }
+  }
+
   function toggleReceiver() {
     if (shutdownPending) return
     var enable = !receiverEnabled
@@ -607,4 +655,10 @@ Item {
   }
   Timer { id: backendRestart; property int attempts: 0; interval: 1000; repeat: false; onTriggered: if (root.receiverEnabled && !backend.running) root.bindBackendRunning() }
   Timer { id: receiverShutdownFallback; interval: 250; repeat: false; onTriggered: root.finishReceiverShutdown() }
+
+  QuickShare {
+    id: quickShareEngine
+    pluginDir: root.pluginDir
+    onCursorRequested: function(index) { root.cursorRequested(index) }
+  }
 }

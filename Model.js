@@ -183,6 +183,21 @@ function receiverEnabledIn(entry) {
   return !!entry && entry.settings.receiverEnabled !== false
 }
 
+// Which pane the two buttons last left selected. Anything unrecognised falls
+// back to localsend, which is the pane that works without a build step.
+function modeIn(entry) {
+  var mode = entry && entry.settings ? String(entry.settings.mode || "") : ""
+  return mode === "quickshare" ? "quickshare" : "localsend"
+}
+
+// `qs` reports phone/tablet/computer/device; the LocalSend helper reports
+// mobile/web/server/headless. Two vocabularies for one icon set, so the Quick
+// Share names are mapped rather than added to iconFor's.
+function quickShareIconFor(type) {
+  if (type === "phone" || type === "tablet") return iconFor("mobile")
+  return iconFor("desktop")
+}
+
 function helperVersionMatches(pluginVersion, helperVersion) {
   return String(pluginVersion || "") !== "" && String(pluginVersion) === String(helperVersion || "")
 }
