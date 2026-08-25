@@ -56,7 +56,7 @@ installs it as `bin/nearby-qs` and every caller uses that absolute path.
 ## Install
 
 ```sh
-git clone https://github.com/OWNER/REPO.git \
+git clone https://github.com/t1nk333r/omarchy-nearby-share.git \
   ~/.config/omarchy/plugins/t1nk33r.nearby-share
 cd ~/.config/omarchy/plugins/t1nk33r.nearby-share
 ./scripts/setup.sh          # hooks + dependencies
