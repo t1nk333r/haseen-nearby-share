@@ -709,7 +709,7 @@ Panel {
           Button {
             visible: root.qsAvailable
             width:parent.width; bordered:false; iconText:"󰑐"
-            text: root.qsScanning ? "Searching\u2026" : "Search for devices"
+            text: "Search for devices"
             tooltipText:"Quick Share only lists devices while it is looking"
             enabled: !root.qsScanning
             foreground:root.foreground; fontFamily:root.fontFamily
