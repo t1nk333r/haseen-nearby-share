@@ -50,8 +50,8 @@ assert.equal(source.includes('PanelSectionHeader { text: "NEARBY"'), false,
   "the device section must not repeat the panel title")
 assert.equal(source.includes('text:root.incomingPinEnabled?"PIN protection is enabled"'), false,
   "PIN settings must not repeat the state already shown in the hero")
-assert.equal((source.match(/text:"Back"/g) || []).length, 2,
-  "the device actions and PIN settings screens both need a visible mouse exit")
+assert.equal((source.match(/text:"Back"/g) || []).length, 3,
+  "the LocalSend device actions, PIN settings and Quick Share send screens each need a visible mouse exit")
 
 assert.equal(source.includes("closeStdin"), false, "Quickshell Process does not expose closeStdin")
 assert.match(source, /onStarted:\s*\{[^}]*write\(root\.incomingText\);\s*stdinEnabled=false\s*\}/,
@@ -82,8 +82,13 @@ assert.match(source, /text:"Copy command"[^\n]*hasCursor:[^\n]*helperCopyCommand
   "the copy-command fallback must participate in keyboard and hover navigation")
 assert.match(source, /text:"Copy link"[^\n]*hasCursor:[^\n]*helperCopyLinkIndex[^\n]*onHovered:[^\n]*helperCopyLinkIndex/,
   "the copy-link fallback must participate in keyboard and hover navigation")
-assert.match(source, /readonly property string repositoryUrl: "https:\/\/github\.com\/jfg96\/omarchy-nearby"/,
-  "the fallback link must point at the plugin repository")
+// Upstream's install.sh refuses a checkout whose origin is not upstream, and
+// would move the tree onto an upstream tag if it did run. The fork's recovery
+// path has to be one that works from inside the fork.
+assert.doesNotMatch(source, /installerCommand: "[^"]*install\.sh"/,
+  "the fork must not send users to upstream's installer to repair the helper")
+assert.match(source, /readonly property string repositoryUrl: "https:\/\/github\.com\/t1nk333r\/omarchy-nearby-share"/,
+  "the fallback link must point at the repository the installer pulls from")
 assert.equal(source.includes("install.sh"), false,
   "the removed standalone installer must not remain in the panel")
 
@@ -162,17 +167,49 @@ const functionNames = [
   "openIncomingPinSettings", "beginIncomingPinEdit", "requestDisableIncomingPin",
   "cancelIncomingPinSettings", "submitIncomingPin", "confirmDisableIncomingPin",
   "clearSecretInputs",
-  "goBack", "selectFiles", "sendClipboard", "copyReceivedText", "moveCursor", "activateCursor",
+  "goBack", "goBackLocalSend", "selectFiles", "sendClipboard", "copyReceivedText",
+  "moveCursor", "activateCursor",
   "retryHelper", "copyText", "copyUpdateCommand", "copyRepositoryLink", "noteHover",
+  // Quick Share pane
+  "setMode", "qsScan", "qsChooseDevice", "qsBack", "qsCancel", "qsFinish",
+  "qsSelectFiles", "installDependencies", "configureFirewall",
 ]
 
 // Every call the view makes has to land on the shared engine, so the stub
 // records rather than implements.
+function stubQuickShare(calls, record) {
+  return {
+    available: true,
+    depsChecked: true,
+    missingDeps: [],
+    devices: [],
+    selectedDevice: null,
+    viewState: "nearby",
+    statusText: "",
+    errorText: "",
+    progress: 0,
+    transferName: "",
+    transferPeer: "",
+    transferPin: "",
+    scan: record("qs.scan"),
+    chooseDevice: record("qs.chooseDevice"),
+    clearTarget: record("qs.clearTarget"),
+    cancelSend: record("qs.cancelSend"),
+    finishTerminal: record("qs.finishTerminal"),
+    sendFiles: record("qs.sendFiles"),
+    refreshDependencies: record("qs.refreshDependencies"),
+    failWith: record("qs.failWith"),
+  }
+}
+
 function stubEngine() {
   const calls = []
   const record = name => (...args) => { calls.push([name, ...args]); return undefined }
   return {
     calls,
+    mode: "localsend",
+    setMode: record("setMode"),
+    quickshare: stubQuickShare(calls, record),
     toggleReceiver: record("toggleReceiver"),
     startDiscovery: record("startDiscovery"),
     forceFullDiscovery: record("forceFullDiscovery"),
@@ -225,8 +262,8 @@ function panel(initial = {}) {
     copyNote: "",
     helperUpdateOffered: false,
     helperUpdateError: "",
-    updateCommand: "omarchy plugin update oma.nearby",
-    repositoryUrl: "https://github.com/jfg96/omarchy-nearby",
+    updateCommand: "omarchy plugin update t1nk33r.nearby-share",
+    repositoryUrl: "https://github.com/t1nk333r/omarchy-nearby-share",
     pinInput: {text: "", forceActiveFocus: () => {}},
     incomingPinInput: {text: "", forceActiveFocus: () => {}},
     keyCatcher: {forceActiveFocus: () => {}},
@@ -243,10 +280,24 @@ function panel(initial = {}) {
     receiverEnabled: true,
     backendReady: true,
     incomingPinEnabled: false,
+    // Quick Share view state. Defaults keep every pre-existing test in the
+    // LocalSend pane, which is the pane those tests were written against.
+    quickShareMode: false,
+    qsViewState: "nearby",
+    qsAvailable: true,
+    qsChecked: true,
+    qsDevices: [],
+    qsSelected: null,
+    qsMissingDeps: [],
+    qsScriptDir: "/tmp/nearby-share/scripts",
+    qsPicker: {running: false, launched: false},
+    depsInstaller: {running: false},
+    firewallSetup: {running: false},
     ...initial,
   }
+  if (context.qs === undefined) context.qs = engine ? engine.quickshare : null
   context.engine = engine
-  for (const name of ["helperUpdateIndex", "helperCopyCommandIndex", "helperCopyLinkIndex"]) {
+  for (const name of ["helperUpdateIndex", "helperCopyCommandIndex", "helperCopyLinkIndex", "qsLastIndex"]) {
     const expression = intBindingExpression(name)
     Object.defineProperty(context, name, {
       enumerable: true,
@@ -424,7 +475,14 @@ function callNames(state) {
   state.moveCursor(0, 5)
   assert.equal(state.selectedIndex, 3, "the cursor stops on incoming PIN settings after rescan")
   state.moveCursor(0, -9)
-  assert.equal(state.selectedIndex, -1, "the cursor stops on the receiver switch above the list")
+  // The fork puts the protocol switcher above the receiver switch, so the
+  // ceiling moved up one row. The receiver switch must still be a stop on the
+  // way rather than something the cursor now skips over.
+  assert.equal(state.selectedIndex, -2, "the cursor stops on the mode switcher above the receiver switch")
+  state.moveCursor(0, 1)
+  assert.equal(state.selectedIndex, -1, "the receiver switch stays reachable below the mode switcher")
+  state.moveCursor(0, -1)
+  assert.equal(state.selectedIndex, -2)
   state.selectedIndex = 2
   state.moveCursor(1, 0)
   assert.equal(state.selectedIndex, 3, "left and right must navigate the compact Nearby action row")
@@ -562,3 +620,9 @@ function callNames(state) {
 }
 
 console.log("panel state tests passed")
+
+// Merge note: upstream's helper-recovery rename (updateCommand / retryHelper /
+// copyUpdateCommand) is adopted, but where upstream and the fork genuinely
+// disagree -- the repository URL and the plugin id in the recovery command --
+// the local fork values (t1nk333r/omarchy-nearby-share, t1nk33r.nearby-share)
+// are kept, along with the fork's Quick Share pane and mode-switcher cursor row.

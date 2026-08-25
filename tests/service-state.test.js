@@ -16,8 +16,13 @@ assert.equal(manifest.entryPoints.service, "Service.qml",
   "the service kind needs an entry point for the shell to load it")
 assert.match(source, /command:\s*\[root\.pluginDir \+ "\/bin\/nearby-helper-launcher"\]/,
   "the helper launcher must be spawned from the service, not from a per-monitor widget")
-assert.match(source, /IpcHandler\s*\{\s*target:\s*"oma\.nearby"/,
+assert.match(source, /IpcHandler\s*\{\s*target:\s*"t1nk33r\.nearby-share"/,
   "the IPC target must be registered once, from the service")
+// The target and the manifest id have to be the same string: the shell routes
+// by manifest id, so a rename that missed one of them would leave the target
+// unreachable while every file still looked plausible.
+assert.match(source, new RegExp(`IpcHandler\\s*\\{\\s*target:\\s*"${manifest.id.replace(/\./g, "\\.")}"`),
+  "the IPC target must match the manifest id")
 
 // Opening a popup is per monitor even though the state behind it is not, so
 // those calls are handed back to the shell to route to the focused screen.
@@ -160,6 +165,7 @@ function engine(initial = {}) {
   const cursors = []
   const notified = []
   const signals = {pinCleared: 0, pinFocusRequested: 0, incomingPinCleared: 0, incomingPinFocusRequested: 0, focusRestoreRequested: 0}
+  const quickShareCalls = []
   const context = {
     Model,
     Date: {now: () => 1000},
@@ -176,8 +182,21 @@ function engine(initial = {}) {
     incomingPinFocusRequested: () => { signals.incomingPinFocusRequested++ },
     focusRestoreRequested: () => { signals.focusRestoreRequested++ },
     shell: null,
-    fileShellConfig: null,
-    moduleEntryId: "oma.nearby",
+    // The engine now hosts a second pane. Defaults keep these tests in the
+    // LocalSend pane they were written for, while still running the real
+    // mode-aware code paths rather than a copy of them.
+    quickShareMode: false,
+    mode: "localsend",
+    quickShareEngine: {
+      available: true,
+      depsChecked: true,
+      missingDeps: [],
+      devices: [],
+      viewState: "nearby",
+      scan: () => { quickShareCalls.push("scan") },
+      refreshDependencies: () => { quickShareCalls.push("refreshDependencies") },
+    },
+    moduleEntryId: "t1nk33r.nearby-share",
     pluginSettings: {},
     receiverConfigured: true,
     openViewCount: 1,
@@ -1065,10 +1084,10 @@ for (const busy of ["sending", "receiving", "pin"]) {
 {
   // Replaying the real startup order: the config arrives after the service is
   // built, and a persisted off must never pass through an eligible state.
-  const off = {version: 1, bar: {layout: {right: [{id: "oma.nearby", receiverEnabled: false}]}}, plugins: []}
+  const off = {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share", receiverEnabled: false}]}}, plugins: []}
   const observed = []
   for (const config of [null, {version: 1, bar: {layout: {right: []}}, plugins: []}, off]) {
-    const entry = Model.barEntry(config, "oma.nearby")
+    const entry = Model.barEntry(config, "t1nk33r.nearby-share")
     observed.push(backendEligible({
       receiverConfigured: entry !== null,
       receiverEnabled: Model.receiverEnabledIn(entry),
@@ -1082,12 +1101,12 @@ for (const busy of ["sending", "receiving", "pin"]) {
 {
   // The persisted value and the effective value are one value, so they cannot
   // diverge: there is nothing to synchronize and no snapshot to go stale.
-  const config = {version: 1, bar: {layout: {right: [{id: "oma.nearby", receiverEnabled: false}]}}, plugins: []}
+  const config = {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share", receiverEnabled: false}]}}, plugins: []}
   const state = engine({shell: {shellConfig: config, updateEntryInline: () => true}})
-  const entry = Model.barEntry(config, "oma.nearby")
+  const entry = Model.barEntry(config, "t1nk33r.nearby-share")
   assert.equal(Model.receiverEnabledIn(entry), false)
   assert.deepEqual(entry.settings, {receiverEnabled: false})
-  assert.equal(entry.id, "oma.nearby")
+  assert.equal(entry.id, "t1nk33r.nearby-share")
   // Turning the receiver on writes the entry rather than a second copy of the
   // state, so a later read of the config is what makes it effective.
   const writes = []
@@ -1095,14 +1114,14 @@ for (const busy of ["sending", "receiving", "pin"]) {
   // are compared by value.
   state.shell = {shellConfig: config, updateEntryInline: (id, settings) => { writes.push([id, JSON.parse(JSON.stringify(settings))]); return true }}
   state.persistReceiverEnabled(true)
-  assert.deepEqual(writes, [["oma.nearby", {receiverEnabled: true}]],
+  assert.deepEqual(writes, [["t1nk33r.nearby-share", {receiverEnabled: true}]],
     "toggling must persist the entry, which is the only place the state lives")
 }
 
 {
   // Other keys on the entry survive a receiver toggle.
-  const config = {version: 1, bar: {layout: {right: [{id: "oma.nearby", tooltip: "keep me"}]}}, plugins: []}
-  const entry = Model.barEntry(config, "oma.nearby")
+  const config = {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share", tooltip: "keep me"}]}}, plugins: []}
+  const entry = Model.barEntry(config, "t1nk33r.nearby-share")
   const writes = []
   const state = engine({
     pluginSettings: entry.settings,
@@ -1121,7 +1140,7 @@ for (const busy of ["sending", "receiving", "pin"]) {
   // silently leaving the authoritative receiver state on.
   const config = {
     version: 1,
-    bar: {layout: {right: ["other.before", "oma.nearby", {id: "other.after", x: 1}]}},
+    bar: {layout: {right: ["other.before", "t1nk33r.nearby-share", {id: "other.after", x: 1}]}},
     plugins: [],
   }
   const shell = {
@@ -1141,25 +1160,25 @@ for (const busy of ["sending", "receiving", "pin"]) {
   }
   const state = engine({
     shell,
-    moduleEntryId: "oma.nearby",
+    moduleEntryId: "t1nk33r.nearby-share",
     pluginSettings: {},
   })
 
   state.persistReceiverEnabled(false)
   assert.deepEqual(shell.shellConfig.bar.layout.right,
-    ["other.before", {id: "oma.nearby", receiverEnabled: false}, {id: "other.after", x: 1}],
+    ["other.before", {id: "t1nk33r.nearby-share", receiverEnabled: false}, {id: "other.after", x: 1}],
     "persisting off must promote the matching string in place without changing its neighbors")
-  const offEntry = Model.barEntry(shell.shellConfig, "oma.nearby")
+  const offEntry = Model.barEntry(shell.shellConfig, "t1nk33r.nearby-share")
   assert.equal(Model.receiverEnabledIn(offEntry), false)
   assert.equal(backendEligible({receiverConfigured: true, receiverEnabled: false, pluginVersion: "1.0.6-dev"}), false)
 
   state.pluginSettings = offEntry.settings
   state.persistReceiverEnabled(true)
-  const onEntry = Model.barEntry(shell.shellConfig, "oma.nearby")
+  const onEntry = Model.barEntry(shell.shellConfig, "t1nk33r.nearby-share")
   assert.equal(Model.receiverEnabledIn(onEntry), true)
   assert.equal(backendEligible({receiverConfigured: true, receiverEnabled: true, pluginVersion: "1.0.6-dev"}), true)
   assert.equal(shell.shellConfig.bar.layout.right.filter(entry =>
-    entry === "oma.nearby" || (entry && entry.id === "oma.nearby")).length, 1,
+    entry === "t1nk33r.nearby-share" || (entry && entry.id === "t1nk33r.nearby-share")).length, 1,
     "promoting and toggling a string-form entry must not create a duplicate")
 }
 
