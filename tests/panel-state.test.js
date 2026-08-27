@@ -50,8 +50,8 @@ assert.equal(source.includes('PanelSectionHeader { text: "NEARBY"'), false,
   "the device section must not repeat the panel title")
 assert.equal(source.includes('text:root.incomingPinEnabled?"PIN protection is enabled"'), false,
   "PIN settings must not repeat the state already shown in the hero")
-assert.equal((source.match(/text:"Back"/g) || []).length, 3,
-  "the LocalSend device actions, PIN settings and Quick Share send screens each need a visible mouse exit")
+assert.equal((source.match(/text:"Back"/g) || []).length, 4,
+  "the LocalSend device actions, PIN settings, device name and Quick Share send screens each need a visible mouse exit")
 
 assert.equal(source.includes("closeStdin"), false, "Quickshell Process does not expose closeStdin")
 assert.match(source, /onStarted:\s*\{[^}]*write\(root\.incomingText\);\s*stdinEnabled=false\s*\}/,
@@ -283,6 +283,12 @@ function panel(initial = {}) {
     // Quick Share view state. Defaults keep every pre-existing test in the
     // LocalSend pane, which is the pane those tests were written against.
     quickShareMode: false,
+    deviceNameMode: "hostname",
+    customDeviceName: "",
+    advertisedName: "luna",
+    systemHostname: "luna",
+    generatedPreview: "Amber Otter",
+    nameInput: {text: ""},
     qsViewState: "nearby",
     qsAvailable: true,
     qsChecked: true,
@@ -475,10 +481,13 @@ function callNames(state) {
   state.moveCursor(0, 5)
   assert.equal(state.selectedIndex, 3, "the cursor stops on incoming PIN settings after rescan")
   state.moveCursor(0, -9)
-  // The fork puts the protocol switcher above the receiver switch, so the
-  // ceiling moved up one row. The receiver switch must still be a stop on the
-  // way rather than something the cursor now skips over.
-  assert.equal(state.selectedIndex, -2, "the cursor stops on the mode switcher above the receiver switch")
+  // Three controls sit above the device list, and each must be its own stop:
+  // -3 the device-name cog, -2 the protocol switcher, -1 the receiver switch.
+  // The ceiling has moved twice as controls were added, so this walks the whole
+  // run rather than asserting a single index.
+  assert.equal(state.selectedIndex, -3, "the cursor stops on the device-name cog, the topmost control")
+  state.moveCursor(0, 1)
+  assert.equal(state.selectedIndex, -2, "the mode switcher is a stop below the cog")
   state.moveCursor(0, 1)
   assert.equal(state.selectedIndex, -1, "the receiver switch stays reachable below the mode switcher")
   state.moveCursor(0, -1)

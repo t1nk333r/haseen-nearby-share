@@ -21,6 +21,10 @@ Item {
   // of the whole high range. scripts/setup_firewall.sh opens this exact port.
   property int port: 53318
   property int scanTimeout: 6
+  // Shown to the phone. `--name` is a global flag on the CLI, so it has to
+  // precede the subcommand; empty means "let qs pick", so it is omitted rather
+  // than passed as an empty string it would advertise literally.
+  property string advertisedName: ""
 
   readonly property string binary: pluginDir + "/bin/nearby-qs"
 
@@ -171,7 +175,12 @@ Item {
   Process {
     id: scanner
     property bool launched: false
-    command: [root.binary, "--port", String(root.port), "devices", "--json", "--timeout", String(root.scanTimeout)]
+    command: {
+      var argv = [root.binary, "--port", String(root.port)]
+      if (root.advertisedName !== "") { argv.push("--name"); argv.push(root.advertisedName) }
+      argv.push("devices"); argv.push("--json"); argv.push("--timeout"); argv.push(String(root.scanTimeout))
+      return argv
+    }
     running: false
     stdout: StdioCollector { id: scanOutput; waitForEnd: true }
     stderr: SplitParser { onRead: function(line) { console.warn("quickshare devices", line) } }
@@ -203,7 +212,9 @@ Item {
     // it is missing. The device id is passed rather than the name: a name
     // match is a substring search and two phones can share one.
     command: {
-      var argv = [root.binary, "--port", String(root.port), "send"]
+      var argv = [root.binary, "--port", String(root.port)]
+      if (root.advertisedName !== "") { argv.push("--name"); argv.push(root.advertisedName) }
+      argv.push("send")
       for (var i = 0; i < root.pendingPaths.length; i++) argv.push(String(root.pendingPaths[i]))
       argv.push("--to")
       argv.push(root.selectedDevice ? String(root.selectedDevice.id) : "")

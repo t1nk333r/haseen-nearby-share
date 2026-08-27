@@ -149,6 +149,7 @@ function helperDerived(state) {
 const functionNames = [
   "viewOpened", "viewClosed", "notificationNeeded",
   "send", "utf8ByteLength", "bindBackendRunning", "persistReceiverEnabled", "toggleReceiver", "finishReceiverShutdown",
+  "persistDeviceName", "chooseNameMode", "submitCustomName", "restartForName",
   "startDiscovery", "forceFullDiscovery", "stopDiscovery", "chooseDevice", "clearTarget",
   "openIncomingPinSettings", "beginIncomingPinEdit", "requestDisableIncomingPin",
   "cancelIncomingPinSettings", "submitIncomingPin", "confirmDisableIncomingPin",
@@ -187,6 +188,15 @@ function engine(initial = {}) {
     // mode-aware code paths rather than a copy of them.
     quickShareMode: false,
     mode: "localsend",
+    // Device-name state. The ready handler records the fingerprint so a
+    // generated name can be seeded from it.
+    helperFingerprint: "",
+    systemHostname: "luna",
+    advertisedName: "luna",
+    deviceNameMode: "hostname",
+    customDeviceName: "",
+    restartingForName: false,
+    nameRestart: {restart: () => {}, stop: () => {}},
     quickShareEngine: {
       available: true,
       depsChecked: true,
@@ -1299,5 +1309,52 @@ assert.match(source, /onFileChanged:\s*reload\(\)/,
 assert.match(source,
   /function failWith\(message\)\s*\{\s*viewState="error";\s*errorText=message;\s*statusText=errorText\s*\}/,
   "failWith must keep statusText aligned with errorText for every failure that reaches it")
+
+
+// --- renaming must not switch the receiver off ------------------------------
+// A rename bounces the helper through the same shutdown path that turning the
+// receiver off uses. Without the restartingForName guard, finishReceiverShutdown
+// persists receiverEnabled=false, so renaming silently stops the machine
+// receiving -- a failure the user only discovers when a transfer never arrives.
+{
+  const state = engine({receiverEnabled: true, restartingForName: true, shutdownPending: true})
+  const writes = []
+  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share"}]}}, plugins: []},
+                 updateEntryInline: (id, settings) => { writes.push([id, JSON.parse(JSON.stringify(settings))]); return true }}
+  state.finishReceiverShutdown()
+  assert.equal(state.restartingForName, false, "the rename flag is cleared once the bounce completes")
+  assert.equal(state.shutdownPending, false)
+  assert.equal(writes.length, 0, "a rename must not persist any receiverEnabled change")
+  assert.notEqual(state.statusText, "Turned off",
+    "a rename reports that it is restarting, not that the receiver was turned off")
+}
+
+// The ordinary off path is unaffected by the guard.
+{
+  const state = engine({receiverEnabled: true, restartingForName: false, shutdownPending: true})
+  const writes = []
+  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share"}]}}, plugins: []},
+                 updateEntryInline: (id, settings) => { writes.push([id, JSON.parse(JSON.stringify(settings))]); return true }}
+  state.finishReceiverShutdown()
+  assert.equal(state.statusText, "Turned off")
+  assert.equal(writes.length, 1, "turning the receiver off still persists the setting")
+}
+
+// --- device name persistence ------------------------------------------------
+{
+  const state = engine({})
+  const writes = []
+  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share"}]}}, plugins: []},
+                 updateEntryInline: (id, settings) => { writes.push(JSON.parse(JSON.stringify(settings))); return true }}
+  state.persistDeviceName("custom", "My Box")
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].deviceNameMode, "custom")
+  assert.equal(writes[0].deviceName, "My Box")
+
+  writes.length = 0
+  state.persistDeviceName("nonsense", "")
+  assert.equal(writes[0].deviceNameMode, "hostname",
+    "an unknown mode is normalised before it reaches the config")
+}
 
 console.log("service state tests passed")

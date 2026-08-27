@@ -203,4 +203,52 @@ assert.deepEqual(Model.barEntry({version:1, plugins:[{id:"oma.nearby",receiverEn
 assert.equal(Model.barEntry({version:1, bar:{layout:{right:[null,"other.plugin",42]}}}, "oma.nearby"), null)
 assert.equal(Model.barEntry({version:1, plugins:["oma.nearby"]}, "oma.nearby"), null)
 
+
+// --- device name -----------------------------------------------------------
+// ROBUSTNESS.md item 10: names containing markup must render literally. The
+// shared UI kit renders device rows with Qt's AutoText, so neutralising has to
+// happen here rather than at the render site.
+assert.equal(Model.displayName("<b>Phone</b>"), "bPhone/b")
+assert.equal(Model.displayName("<img src=x>"), "img src=x")
+assert.equal(Model.displayName("Phone\nName"), "Phone Name", "a newline must not break the row")
+assert.equal(Model.displayName("Phone\u0007Name"), "Phone Name", "control characters are neutralised")
+assert.equal(Model.displayName("  Phone  "), "Phone")
+assert.equal(Model.displayName(""), "")
+assert.equal(Model.displayName(null), "")
+assert.equal(Model.displayName(undefined), "")
+assert.equal(Model.displayName("x".repeat(200)).length, 64, "an over-long name is capped")
+assert.equal(Model.displayName("Ok Name"), "Ok Name", "an ordinary name is unchanged")
+assert.equal(Model.displayName("Phone \u2764"), "Phone \u2764", "emoji survive")
+assert.equal(Model.upsertDevice([], {alias:"<b>P</b>", fingerprint:"fp"})[0].alias, "bP/b",
+  "the LocalSend ingestion point neutralises aliases")
+
+assert.equal(Model.deviceNameModeIn(null), "hostname")
+assert.equal(Model.deviceNameModeIn({}), "hostname")
+assert.equal(Model.deviceNameModeIn({settings:{}}), "hostname")
+assert.equal(Model.deviceNameModeIn({settings:{deviceNameMode:"generated"}}), "generated")
+assert.equal(Model.deviceNameModeIn({settings:{deviceNameMode:"custom"}}), "custom")
+assert.equal(Model.deviceNameModeIn({settings:{deviceNameMode:"nonsense"}}), "hostname",
+  "an unknown mode falls back rather than advertising nothing")
+assert.equal(Model.customDeviceNameIn(null), "")
+assert.equal(Model.customDeviceNameIn({settings:{deviceName:"Box"}}), "Box")
+
+// Seeded, not random: a name that changed per launch would show up on the
+// phone as a brand-new device every time.
+assert.equal(Model.generatedDeviceName("fp"), Model.generatedDeviceName("fp"), "generation is deterministic")
+assert.notEqual(Model.generatedDeviceName("fp-a"), Model.generatedDeviceName("fp-b"))
+assert.match(Model.generatedDeviceName("fp"), /^[A-Z][a-z]+ [A-Z][a-z]+$/)
+
+assert.equal(Model.resolveDeviceName({settings:{}}, "luna", "fp"), "luna")
+assert.equal(Model.resolveDeviceName({settings:{deviceNameMode:"custom",deviceName:"My Box"}}, "luna", "fp"), "My Box")
+assert.equal(Model.resolveDeviceName({settings:{deviceNameMode:"custom",deviceName:""}}, "luna", "fp"), "luna",
+  "an empty custom name falls back instead of advertising nothing")
+assert.equal(Model.resolveDeviceName({settings:{deviceNameMode:"generated"}}, "luna", "fp"),
+  Model.generatedDeviceName("fp"))
+assert.notEqual(Model.resolveDeviceName({settings:{}}, "", "fp"), "",
+  "an unknown hostname still yields a usable name")
+assert.equal(Model.resolveDeviceName({settings:{deviceNameMode:"custom",deviceName:"<b>x</b>"}}, "luna", "fp"), "bx/b",
+  "a user-typed name is sanitised like a remote one")
+assert.equal(Model.resolveDeviceName({settings:{deviceNameMode:"custom",deviceName:"y".repeat(80)}}, "luna", "fp").length, 32,
+  "a custom name is capped at the advertised limit")
+
 console.log("Model tests passed")

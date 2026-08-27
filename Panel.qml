@@ -67,6 +67,12 @@ Panel {
     ? 0
     : (qsAvailable ? qsDevices.length : 0)
 
+  readonly property string deviceNameMode: engine ? engine.deviceNameMode : "hostname"
+  readonly property string customDeviceName: engine ? engine.customDeviceName : ""
+  readonly property string advertisedName: engine ? engine.advertisedName : ""
+  readonly property string systemHostname: engine ? engine.systemHostname : ""
+  readonly property string generatedPreview: Model.generatedDeviceName(systemHostname || "nearby")
+
   readonly property bool backendReady: engine ? engine.backendReady : false
   readonly property bool receiverEnabled: engine ? engine.receiverEnabled : false
   readonly property bool discoveryActive: engine ? engine.discoveryActive : false
@@ -178,6 +184,11 @@ Panel {
   function installDependencies() { if (!depsInstaller.running) depsInstaller.running = true }
   function configureFirewall() { if (!firewallSetup.running) firewallSetup.running = true }
 
+  function openDeviceName() { if (engine) engine.openDeviceName() }
+  function closeDeviceName() { if (engine) engine.closeDeviceName() }
+  function chooseNameMode(mode) { if (engine) engine.chooseNameMode(mode) }
+  function submitCustomName() { if (engine) engine.submitCustomName(String(nameInput.text || "")) }
+
   function toggleReceiver() { if (engine) engine.toggleReceiver() }
   function startDiscovery() { if (engine) engine.startDiscovery() }
   function forceFullDiscovery() { if (engine) engine.forceFullDiscovery() }
@@ -211,7 +222,7 @@ Panel {
     }
     return goBackLocalSend()
   }
-  function goBackLocalSend() { if (viewState === "pin") cancelPin(); else if (viewState.indexOf("incoming_pin_")===0) cancelIncomingPinSettings(); else if (viewState === "target") { if (engine) engine.clearTarget() } else close() }
+  function goBackLocalSend() { if (viewState === "device_name") { closeDeviceName(); return } if (viewState === "pin") cancelPin(); else if (viewState.indexOf("incoming_pin_")===0) cancelIncomingPinSettings(); else if (viewState === "target") { if (engine) engine.clearTarget() } else close() }
 
   // The chooser and the clipboard belong to the monitor the user acted on, so
   // they stay with the view and hand their result to the engine.
@@ -239,6 +250,10 @@ Panel {
 
   function moveCursor(dx, dy) {
     cursorActive = true
+    if (viewState === "device_name" && !quickShareMode) {
+      if (dy !== 0) selectedIndex = Math.max(0, Math.min(3, selectedIndex + dy))
+      return
+    }
     if (selectedIndex === -2 && dx !== 0) {
       setMode(dx > 0 ? "quickshare" : "localsend")
       return
@@ -271,7 +286,7 @@ Panel {
         selectedIndex = Math.max(devices.length, Math.min(lastNearbyIndex, selectedIndex + dx))
         return
       }
-      if (dy !== 0) selectedIndex = Math.max(-2, Math.min(lastNearbyIndex, selectedIndex + dy))
+      if (dy !== 0) selectedIndex = Math.max(-3, Math.min(lastNearbyIndex, selectedIndex + dy))
       return
     }
     if (dx !== 0 && (viewState === "incoming" || viewState === "text" || viewState === "incoming_pin_disable")) {
@@ -286,6 +301,14 @@ Panel {
     if (count > 0 && dy !== 0) selectedIndex = Math.max(0, Math.min(count - 1, selectedIndex + dy))
   }
   function activateCursor() {
+    if (viewState === "device_name" && !quickShareMode) {
+      if (selectedIndex === 0) chooseNameMode("hostname")
+      else if (selectedIndex === 1) chooseNameMode("generated")
+      else if (selectedIndex === 2) chooseNameMode("custom")
+      else closeDeviceName()
+      return
+    }
+    if (selectedIndex === -3) { openDeviceName(); return }
     if (selectedIndex === -2) { setMode(quickShareMode ? "localsend" : "quickshare"); return }
     if (quickShareMode) {
       if (qsViewState === "target") {
@@ -421,17 +444,28 @@ Panel {
           detail: ""
           foreground: root.foreground; fontFamily: root.fontFamily
           iconComponent: Component { Text { text: root.viewState === "incoming" ? "󰁅" : "󰀂"; color: root.incoming ? root.urgent : root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.display } }
-          trailingControl: root.viewState === "nearby" ? receiverToggle : null
+          trailingControl: root.viewState === "nearby" ? nearbyHeroControls : null
         }
         Component {
-          id: receiverToggle
+          id: nearbyHeroControls
+          Row {
+            spacing: Style.space(8)
+            Button {
+              bordered: false; iconText: "\u{f0493}"; text: ""
+              tooltipText: "Device name"
+              foreground: root.dim; fontFamily: root.fontFamily
+              hasCursor: root.cursorActive && root.selectedIndex === -3
+              onHovered: function(v) { root.noteHover(v, -3) }
+              onClicked: root.openDeviceName()
+            }
           ToggleSwitch {
             checked: root.receiverEnabled
-            hasCursor: root.cursorActive && root.selectedIndex < 0
+            hasCursor: root.cursorActive && root.selectedIndex === -1
             foreground: root.foreground
             onHovered: function(on) { root.noteHover(on, -1) }
             onToggled: root.toggleReceiver()
             PanelToolTip { visible: parent.containsMouse; text: root.receiverEnabled ? "Turn Nearby off" : "Turn Nearby on"; fontFamily:root.fontFamily }
+          }
           }
         }
         PanelSeparator { width: parent.width }
@@ -631,6 +665,57 @@ Panel {
           Text { width:parent.width; textFormat:Text.PlainText; text:root.viewState==="success" ? root.statusText : root.errorText; wrapMode:Text.Wrap; color:root.viewState==="error"?root.urgent:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.title; font.bold:true }
           Text { visible:root.viewState==="success"; width:parent.width; textFormat:Text.PlainText; text:root.transferPeer!=="" ? (root.statusText==="Sent"?"to ":"from ")+root.transferPeer : ""; wrapMode:Text.Wrap; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body }
           Button { text:"Done"; bordered:true; foreground:root.foreground; hasCursor:root.cursorActive; onClicked:root.finishTerminal() }
+        }
+
+        Column {
+          visible: !root.quickShareMode && root.viewState === "device_name"
+          width:parent.width; spacing:Style.space(6)
+          PanelSectionHeader { text:"DEVICE NAME"; foreground:root.foreground; fontFamily:root.fontFamily }
+          Text {
+            width:parent.width; textFormat:Text.PlainText; wrapMode:Text.Wrap
+            text:"Nearby devices see this machine as \u201c" + root.advertisedName + "\u201d."
+            color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body
+          }
+          Button {
+            width:parent.width; leftAlign:true; bordered:root.deviceNameMode==="hostname"
+            iconText:"\u{f0322}"; text:"Hostname \u00b7 " + (root.systemHostname !== "" ? root.systemHostname : "unknown")
+            foreground:root.deviceNameMode==="hostname"?root.foreground:root.dim; fontFamily:root.fontFamily
+            hasCursor:root.cursorActive&&root.selectedIndex===0
+            onHovered:function(v){root.noteHover(v,0)}; onClicked:root.chooseNameMode("hostname")
+          }
+          Button {
+            width:parent.width; leftAlign:true; bordered:root.deviceNameMode==="generated"
+            iconText:"\u{f0674}"; text:"Generated \u00b7 " + root.generatedPreview
+            foreground:root.deviceNameMode==="generated"?root.foreground:root.dim; fontFamily:root.fontFamily
+            hasCursor:root.cursorActive&&root.selectedIndex===1
+            onHovered:function(v){root.noteHover(v,1)}; onClicked:root.chooseNameMode("generated")
+          }
+          Button {
+            width:parent.width; leftAlign:true; bordered:root.deviceNameMode==="custom"
+            iconText:"\u{f03eb}"; text:"Custom"
+            foreground:root.deviceNameMode==="custom"?root.foreground:root.dim; fontFamily:root.fontFamily
+            hasCursor:root.cursorActive&&root.selectedIndex===2
+            onHovered:function(v){root.noteHover(v,2)}; onClicked:root.chooseNameMode("custom")
+          }
+          TextField {
+            id: nameInput
+            visible: root.deviceNameMode === "custom"
+            width:parent.width; placeholderText:"Name shown to other devices"; maximumLength:32
+            foreground:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.body
+            onAccepted: root.submitCustomName()
+            Keys.onPressed: function(event) { if(event.key===Qt.Key_Escape){root.closeDeviceName();event.accepted=true} }
+          }
+          Text {
+            width:parent.width; textFormat:Text.PlainText; wrapMode:Text.Wrap
+            text:"Changing the name restarts the receiver for a moment."
+            color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body
+          }
+          Button {
+            width:parent.width; leftAlign:true; bordered:false; iconText:"\u{f0141}"; text:"Back"
+            foreground:root.dim; fontFamily:root.fontFamily
+            hasCursor:root.cursorActive&&root.selectedIndex===3
+            onHovered:function(v){root.noteHover(v,3)}; onClicked:root.closeDeviceName()
+          }
         }
 
         Column {

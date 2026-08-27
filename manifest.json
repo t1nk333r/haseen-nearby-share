@@ -32,6 +32,16 @@
       "type": "string",
       "default": "localsend",
       "description": "Which pane opens first: localsend or quickshare"
+    },
+    "deviceNameMode": {
+      "type": "string",
+      "default": "hostname",
+      "description": "Where the advertised name comes from: hostname, generated or custom"
+    },
+    "deviceName": {
+      "type": "string",
+      "default": "",
+      "description": "The advertised name when deviceNameMode is custom"
     }
   }
 }

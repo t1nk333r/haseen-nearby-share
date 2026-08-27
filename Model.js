@@ -14,7 +14,7 @@ function upsertDevice(devices, device) {
   var found = -1
   for (var i = 0; i < next.length; i++) if (next[i].fingerprint === device.fingerprint) { found = i; break }
   var row = {
-    alias: String(device.alias), version: String(device.version || "2.1"), deviceModel: String(device.deviceModel || ""),
+    alias: displayName(device.alias), version: String(device.version || "2.1"), deviceModel: String(device.deviceModel || ""),
     deviceType: String(device.deviceType || "desktop"), fingerprint: String(device.fingerprint),
     port: Number(device.port || 53317), protocol: String(device.protocol || "https"),
     download: device.download === true, ip: String(device.ip || "")
@@ -193,6 +193,60 @@ function modeIn(entry) {
 // `qs` reports phone/tablet/computer/device; the LocalSend helper reports
 // mobile/web/server/headless. Two vocabularies for one icon set, so the Quick
 // Share names are mapped rather than added to iconFor's.
+// Remote device names arrive from unauthenticated LAN advertisements, and the
+// shared Omarchy UI kit renders Button.text and PanelHero.title/meta with Qt's
+// default AutoText, which turns anything that looks like markup into markup.
+// The plugin cannot set textFormat on those elements, so names are neutralised
+// here instead -- once, at the boundary, covering every downstream sink.
+// ROBUSTNESS.md item 10 requires such names render literally.
+function displayName(value, limit) {
+  var text = String(value === undefined || value === null ? "" : value)
+  var max = Number(limit || 64)
+  text = text.replace(/[<>]/g, "").replace(/[\x00-\x1F\x7F]/g, " ")
+  text = text.replace(/\s+/g, " ").trim()
+  if (text.length > max) text = text.slice(0, max - 1) + "\u2026"
+  return text
+}
+
+// Where the advertised name comes from. Only the mode and the custom string are
+// persisted; hostname and generated are derived, so they cannot go stale.
+function deviceNameModeIn(entry) {
+  var mode = entry && entry.settings ? String(entry.settings.deviceNameMode || "") : ""
+  return (mode === "hostname" || mode === "generated" || mode === "custom") ? mode : "hostname"
+}
+
+function customDeviceNameIn(entry) {
+  return entry && entry.settings ? String(entry.settings.deviceName || "") : ""
+}
+
+// Deterministic from the seed. A name that changed on every launch would appear
+// on the phone as a brand-new device each time, so this is seeded rather than
+// random and needs no persistence of its own.
+function generatedDeviceName(seed) {
+  var adjectives = ["Amber", "Brisk", "Calm", "Copper", "Dusty", "Eager", "Fleet", "Glass",
+                    "Hazel", "Ivory", "Jolly", "Keen", "Lucky", "Mellow", "Noble", "Olive",
+                    "Plucky", "Quiet", "Rapid", "Silver", "Tidy", "Umber", "Vivid", "Warm"]
+  var nouns = ["Otter", "Badger", "Falcon", "Heron", "Lynx", "Marten", "Osprey", "Puffin",
+               "Raven", "Shrew", "Stoat", "Tern", "Vole", "Weasel", "Wren", "Ibis",
+               "Kestrel", "Magpie", "Nuthatch", "Pika", "Quail", "Redwing", "Sable", "Teal"]
+  var text = String(seed || "")
+  var hash = 0
+  for (var i = 0; i < text.length; i++) hash = ((hash * 31) + text.charCodeAt(i)) >>> 0
+  return adjectives[hash % adjectives.length] + " " + nouns[(hash >>> 8) % nouns.length]
+}
+
+// Never returns empty: an empty alias makes the helper advertise nothing useful,
+// so every branch falls through to a generated name rather than to "".
+function resolveDeviceName(entry, hostname, seed) {
+  var mode = deviceNameModeIn(entry)
+  var custom = displayName(customDeviceNameIn(entry), 32)
+  var host = displayName(hostname, 32)
+  if (mode === "custom" && custom !== "") return custom
+  if (mode === "generated") return generatedDeviceName(seed || host || "nearby")
+  if (host !== "") return host
+  return generatedDeviceName(seed || "nearby")
+}
+
 function quickShareIconFor(type) {
   if (type === "phone" || type === "tablet") return iconFor("mobile")
   return iconFor("desktop")
@@ -279,4 +333,4 @@ function manifestMinHelperVersion(text, pluginId) {
   }
 }
 
-if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, enqueueIncoming, removeIncoming, currentIncoming, outgoingCommand, viewAfterOutgoing, parseShellConfig, barEntry, hasStringBarEntry, promoteStringBarEntry, receiverEnabledIn, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }
+if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, enqueueIncoming, removeIncoming, currentIncoming, outgoingCommand, viewAfterOutgoing, parseShellConfig, barEntry, hasStringBarEntry, promoteStringBarEntry, receiverEnabledIn, modeIn, quickShareIconFor, displayName, deviceNameModeIn, customDeviceNameIn, generatedDeviceName, resolveDeviceName, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }

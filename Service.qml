@@ -61,6 +61,18 @@ Item {
   readonly property string mode: Model.modeIn(configEntry)
   readonly property bool quickShareMode: mode === "quickshare"
   readonly property var quickshare: quickShareEngine
+  // The name this machine advertises. Three sources; only the mode and the
+  // custom string are persisted, because hostname and generated are derived.
+  readonly property string deviceNameMode: Model.deviceNameModeIn(configEntry)
+  readonly property string customDeviceName: Model.customDeviceNameIn(configEntry)
+  // Seeded from the TLS fingerprint so a generated name is stable for this
+  // machine and distinct from another machine sharing a hostname.
+  readonly property string advertisedName: Model.resolveDeviceName(configEntry, systemHostname, helperFingerprint !== "" ? helperFingerprint : systemHostname)
+  property string systemHostname: ""
+  property string helperFingerprint: ""
+  // Set while a rename is bouncing the helper, so the shutdown handler knows
+  // not to turn the receiver off on the way through.
+  property bool restartingForName: false
 
   property string pluginVersion: ""
   property string minHelperVersion: ""
@@ -138,6 +150,14 @@ Item {
   signal incomingPinFocusRequested()
   signal focusRestoreRequested()
 
+  // /proc, not `hostname` -- no subprocess, and it is always readable.
+  FileView {
+    path: "/proc/sys/kernel/hostname"
+    printErrors: false
+    onLoaded: root.systemHostname = String(text() || "").trim()
+    onLoadFailed: root.systemHostname = ""
+  }
+
   FileView {
     path: root.pluginDir + "/manifest.json"
     printErrors: false
@@ -196,6 +216,7 @@ Item {
     function receiverToggle(): string { root.toggleReceiver(); return "ok" }
     // The pane switch, for a keybinding or a script. `mode` with no argument
     // reports; the two named methods select.
+    function name(): string { return root.advertisedName }
     function mode(): string { return root.mode }
     function localsend(): string { root.setMode("localsend"); return "ok" }
     function quickshare(): string { root.setMode("quickshare"); return "ok" }
@@ -303,6 +324,40 @@ Item {
   // Switching panes abandons neither transfer: the LocalSend helper keeps
   // receiving while the Quick Share pane is showing, and a `qs send` in flight
   // survives a switch back. Only the cursor and the per-pane target reset.
+  function persistDeviceName(mode, custom) {
+    if (!shell) return
+    var wanted = (mode === "hostname" || mode === "generated" || mode === "custom") ? mode : "hostname"
+    var settings = Object.assign({}, pluginSettings, { deviceNameMode: wanted, deviceName: String(custom || "") })
+    if (Model.hasStringBarEntry(shell.shellConfig, moduleEntryId)
+        && typeof shell.mutateShellConfig === "function") {
+      shell.mutateShellConfig(function(config) {
+        Model.promoteStringBarEntry(config, moduleEntryId, settings)
+      })
+      return
+    }
+    shell.updateEntryInline(moduleEntryId, settings)
+  }
+  function chooseNameMode(mode) { persistDeviceName(mode, customDeviceName) }
+  function submitCustomName(text) { persistDeviceName("custom", String(text || "")) }
+  function openDeviceName() { viewState = "device_name"; cursorRequested(0) }
+  function closeDeviceName() { viewState = "nearby"; cursorRequested(0); focusRestoreRequested() }
+
+  // The helper reads its alias once, at startup, so a rename means bouncing it.
+  // Debounced because a custom name is typed one character at a time and the
+  // port would otherwise be bound and unbound per keystroke.
+  onAdvertisedNameChanged: {
+    if (!receiverEnabled || !backend.running || shutdownPending) return
+    nameRestart.restart()
+  }
+  function restartForName() {
+    if (!receiverEnabled || shutdownPending || !backend.running) return
+    restartingForName = true
+    shutdownPending = true
+    statusText = "Applying new name\u2026"
+    send({command:"shutdown"})
+    receiverShutdownFallback.restart()
+  }
+
   function setMode(next) {
     var wanted = next === "quickshare" ? "quickshare" : "localsend"
     if (wanted === mode) return
@@ -333,6 +388,19 @@ Item {
   function finishReceiverShutdown() {
     receiverShutdownFallback.stop()
     shutdownPending = false
+    // A rename bounces the helper through this same path. Persisting `false`
+    // here would turn receiving off as a side effect of renaming, which the
+    // user would only discover when a transfer failed.
+    if (restartingForName) {
+      restartingForName = false
+      backendReady = false
+      devices = []
+      selectedDevice = null
+      statusText = "Starting receiver\u2026"
+      errorText = ""
+      if (!backend.running) bindBackendRunning()
+      return
+    }
     persistReceiverEnabled(false)
     backendReady = false
     devices = []
@@ -545,7 +613,7 @@ Item {
         send({command:"shutdown"})
         return
       }
-      backendAcceptedThisRun=true; backendReady=true; backendVersionMismatch=false; backendRestart.attempts=0; statusText="Ready to receive"; errorText=""; if(anyViewOpen&&viewState==="nearby")startDiscovery()
+      helperFingerprint=String(event.fingerprint || helperFingerprint); backendAcceptedThisRun=true; backendReady=true; backendVersionMismatch=false; backendRestart.attempts=0; statusText="Ready to receive"; errorText=""; if(anyViewOpen&&viewState==="nearby")startDiscovery()
     }
     else if (event.event === "incoming_pin_state") {
       incomingPinEnabled=event.enabled===true
@@ -602,6 +670,13 @@ Item {
     id: backend
     property bool launched: false
     command: [root.pluginDir + "/bin/nearby-helper-launcher"]
+    // The helper takes its advertised alias from HOSTNAME at startup, and
+    // HOSTNAME is a bash variable that is never exported -- so a GUI-launched
+    // helper always fell back to a hardcoded string. Supplying it here fixes
+    // the name without patching the helper, which stays identical to upstream.
+    // Kept over upstream, which launches the helper with no environment: the
+    // launcher has to pass HOSTNAME through to the cached helper it executes.
+    environment: ({ "HOSTNAME": root.advertisedName })
     // Not eligible to start until shell.json has been read. Defaulting to on
     // before then would let the helper bind the LocalSend port and announce
     // itself on the network for a user who had turned the receiver off.
@@ -654,11 +729,13 @@ Item {
     onExited: function(code) { root.finishHelperUpdate(code) }
   }
   Timer { id: backendRestart; property int attempts: 0; interval: 1000; repeat: false; onTriggered: if (root.receiverEnabled && !backend.running) root.bindBackendRunning() }
+  Timer { id: nameRestart; interval: 1200; repeat: false; onTriggered: root.restartForName() }
   Timer { id: receiverShutdownFallback; interval: 250; repeat: false; onTriggered: root.finishReceiverShutdown() }
 
   QuickShare {
     id: quickShareEngine
     pluginDir: root.pluginDir
+    advertisedName: root.advertisedName
     onCursorRequested: function(index) { root.cursorRequested(index) }
   }
 }
