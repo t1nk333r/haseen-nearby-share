@@ -88,99 +88,191 @@ function viewAfterOutgoing(hasPendingIncoming, terminalState) {
   return hasPendingIncoming ? "incoming" : terminalState
 }
 
-// The plugin's own entry in shell.json, or null when it is not there yet.
+// ------------------------------------------------------------- shell.json
 //
-// The service reads its settings from the shell config rather than waiting for
-// a bar widget to hand them over. Widgets are built once per monitor and get
-// their `settings` injected a tick after they are created, so a widget cannot
-// report the persisted state at the moment it starts up, and several widgets
+// Settings live in ~/.config/omarchy/shell.json and nowhere else.
+//
+// The service reads them from the config rather than waiting for a bar widget
+// to hand them over. Widgets are built once per monitor and get their
+// `settings` injected a tick after they are created, so a widget cannot report
+// the persisted state at the moment it starts up, and several widgets
 // reporting the same state is redundant rather than authoritative.
 //
-// Null means "shell.json has not been applied yet", not "no settings": the
-// shell only keeps this plugin loaded while the entry exists, so an absent
-// entry is a config that has not arrived rather than one that says nothing.
-function barEntry(config, pluginId) {
-  var id = String(pluginId || "")
-  if (!config || typeof config !== "object" || id === "") return null
-  var layout = config.bar && typeof config.bar === "object" ? config.bar.layout : null
-  var regions = ["left", "center", "right"]
-  for (var r = 0; r < regions.length; r++) {
-    var entries = layout && Array.isArray(layout[regions[r]]) ? layout[regions[r]] : []
-    for (var e = 0; e < entries.length; e++) {
-      var entry = entries[e]
-      if (typeof entry === "string") {
-        if (entry === id) return { id: id, settings: {} }
-        continue
-      }
-      if (!entry || typeof entry !== "object") continue
-      if (String(entry.id || "") !== id) continue
-      var settings = {}
-      for (var key in entry) if (key !== "id") settings[key] = entry[key]
-      return { id: String(entry.id), settings: settings }
-    }
+// These functions take the whole document, because the answer is spread across
+// two places the host treats as one: an entry in bar.layout, and a marker in
+// the top-level plugins[]. See barEntry.
+
+var SECTIONS = ["left", "center", "right"]
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+// A `var` property handed over by the host arrives as a QVariant, so a JSON
+// array in it fails Array.isArray. Index by length instead.
+function isArrayLike(value) {
+  return !!value && typeof value === "object" && value.length !== undefined
+}
+
+// Util.canonicalWidgetId in the host is the identity function, so an id is its
+// own canonical form. Not String(id) straight away: String(undefined) is
+// "undefined", which would give every id-less entry the same phantom id.
+function entryIdOf(entry) {
+  var id = isPlainObject(entry) ? entry.id : entry
+  return id === undefined || id === null ? "" : String(id)
+}
+
+// Everything an entry carries except its id -- the shape the host injects as a
+// widget's `settings` and the shape it writes back. `items` is deliberately
+// included: a write replaces the whole entry, so dropping it here would delete
+// a drawer's contents on the first settings change.
+function entrySettings(entry) {
+  var out = {}
+  if (!isPlainObject(entry)) return out
+  for (var key in entry) if (key !== "id") out[key] = entry[key]
+  return out
+}
+
+// Accepts either a whole shell.json document (`config.bar.layout`) or the bar
+// config the host hands a plugin as shell.barConfig (`config.layout`), which is
+// a copy of shellConfig.bar and has no `bar` of its own.
+function layoutSectionsIn(config) {
+  if (!isPlainObject(config)) return null
+  var bar = isPlainObject(config.bar) ? config.bar : config
+  return isPlainObject(bar.layout) ? bar.layout : null
+}
+
+// Every placement of one id in the layout, at any depth. Depth 0 is a section
+// entry; deeper is a widget hosted inside another widget's `items[]`, which is
+// how a drawer (t1nk33r.nook) carries the widgets it absorbed.
+function collectLayoutMatches(list, id, depth, out) {
+  if (!isArrayLike(list)) return out
+  for (var i = 0; i < list.length; i++) {
+    var entry = list[i]
+    if (entryIdOf(entry) === id)
+      out.push({ depth: depth, object: isPlainObject(entry), settings: entrySettings(entry) })
+    if (isPlainObject(entry) && isArrayLike(entry.items))
+      collectLayoutMatches(entry.items, id, depth + 1, out)
   }
-  var plugins = Array.isArray(config.plugins) ? config.plugins : []
-  for (var p = 0; p < plugins.length; p++) {
-    var plugin = plugins[p]
-    if (!plugin || typeof plugin !== "object" || String(plugin.id || "") !== id) continue
-    var pluginSettings = {}
-    for (var pluginKey in plugin) if (pluginKey !== "id") pluginSettings[pluginKey] = plugin[pluginKey]
-    return { id: String(plugin.id), settings: pluginSettings }
+  return out
+}
+
+function layoutMatchesIn(config, id) {
+  var out = []
+  var layout = layoutSectionsIn(config)
+  if (!layout || id === "") return out
+  for (var s = 0; s < SECTIONS.length; s++) collectLayoutMatches(layout[SECTIONS[s]], id, 0, out)
+  return out
+}
+
+// The first plugins[] marker for this id, or null. Only an object marker can
+// carry settings; the host writes `{id: ...}` over whatever was there.
+function markerSettingsIn(config, id) {
+  var plugins = isPlainObject(config) && isArrayLike(config.plugins) ? config.plugins : null
+  if (!plugins || id === "") return null
+  for (var i = 0; i < plugins.length; i++) {
+    if (entryIdOf(plugins[i]) !== id) continue
+    if (!isPlainObject(plugins[i])) continue
+    return entrySettings(plugins[i])
   }
   return null
 }
 
-// A compatibility config read from disk on hosts whose scoped plugin API no
-// longer injects shell.json. Anything that is not an object is a config that
-// has not arrived: null keeps the receiver off until a valid file exists.
-function parseShellConfig(text) {
-  try {
-    const parsed = JSON.parse(String(text || ""))
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null
-  } catch (_) {
-    return null
-  }
-}
-
-// Quattro accepts a bare id in bar.layout, but its inline-settings writer can
-// only attach settings to object entries. Promote a matching string in place
-// before writing the first setting; top-level plugins[] does not accept this
-// form in the host and is deliberately excluded.
-function hasStringBarEntry(config, pluginId) {
+// The plugin's own settings, and where a write to them lands.
+//
+// Null means "shell.json has not been read yet", not "no settings": the shell
+// only keeps this plugin loaded while an entry exists, so nothing found is a
+// config that has not arrived rather than one that says nothing. Callers pair
+// this with receiverEnabledIn, which reports off for null -- the two together
+// distinguish "not configured" from "configured off".
+//
+// `source` is the entry shell.qml:1078 updateEntryInline() would write, and the
+// merge precedence is that same order, so what the plugin reads back is what it
+// wrote:
+//
+//   layout  a top-level object entry in bar.layout. Every top-level match is
+//           overwritten with the same value, so the first one is the truth.
+//   plugins the plugins[] marker, used when no top-level object entry matches.
+//           A bare string in bar.layout is not a write target: the host matches
+//           entries through entry.id, which a string does not have.
+//   items   hosted inside a drawer and with no marker. The host writes nothing,
+//           so a settings change cannot persist; entryWritable reports false.
+//
+// A drawer's items[] entry is the lowest precedence because the host never
+// writes it, which is also how t1nk33r.nook reads a widget it hosts
+// (LayoutModel.js hostedSettings).
+//
+// Kept over the upstream barEntry()/parseShellConfig()/hasStringBarEntry()/
+// promoteStringBarEntry() set, which this local rewrite replaces: the two
+// cannot coexist, so the local change wins here.
+function barEntry(config, pluginId) {
   var id = String(pluginId || "")
-  var layout = config && config.bar && typeof config.bar === "object" ? config.bar.layout : null
-  if (!layout || id === "") return false
-  var regions = ["left", "center", "right"]
-  for (var r = 0; r < regions.length; r++) {
-    var entries = Array.isArray(layout[regions[r]]) ? layout[regions[r]] : []
-    for (var e = 0; e < entries.length; e++) if (entries[e] === id) return true
-  }
-  return false
-}
+  if (id === "") return null
+  var matches = layoutMatchesIn(config, id)
+  var marker = markerSettingsIn(config, id)
+  if (!matches.length && marker === null) return null
 
-function promoteStringBarEntry(config, pluginId, settings) {
-  var id = String(pluginId || "")
-  var layout = config && config.bar && typeof config.bar === "object" ? config.bar.layout : null
-  if (!layout || id === "") return false
-  var regions = ["left", "center", "right"]
-  for (var r = 0; r < regions.length; r++) {
-    var entries = Array.isArray(layout[regions[r]]) ? layout[regions[r]] : []
-    for (var e = 0; e < entries.length; e++) {
-      if (entries[e] !== id) continue
-      var promoted = { id: id }
-      for (var key in settings) if (key !== "id") promoted[key] = settings[key]
-      entries[e] = promoted
-      return true
+  var top = null
+  var nested = []
+  for (var m = 0; m < matches.length; m++) {
+    if (matches[m].depth === 0) {
+      if (top === null && matches[m].object) top = matches[m].settings
+      continue
     }
+    nested.push(matches[m])
   }
-  return false
+  // Deepest first, so a shallower host's entry wins over the one it nests.
+  nested.sort(function(left, right) { return right.depth - left.depth })
+
+  var settings = {}
+  var layers = nested.map(function(match) { return match.settings })
+  if (marker !== null) layers.push(marker)
+  if (top !== null) layers.push(top)
+  for (var l = 0; l < layers.length; l++)
+    for (var key in layers[l]) settings[key] = layers[l][key]
+
+  return {
+    id: id,
+    settings: settings,
+    source: top !== null ? "layout" : (marker !== null ? "plugins" : "items"),
+    // The write target's own keys. A write replaces the whole entry, so it has
+    // to resend them -- and only them, or the merged view's foreign keys would
+    // be copied onto a target that never held them.
+    targetSettings: top !== null ? top : (marker !== null ? marker : {})
+  }
+}
+
+// Whether a settings write can land anywhere. False for a widget a drawer hosts
+// with no plugins[] marker beside it: updateEntryInline() searches bar.layout's
+// top level and plugins[], never a drawer's items, so there is nothing to write.
+function entryWritable(entry) {
+  return !!entry && (entry.source === "layout" || entry.source === "plugins")
+}
+
+// The plugins[] markers are not on any 4.0.3 plugin API surface --
+// services/PluginShellApi.qml carries barConfig (a copy of shellConfig.bar) and
+// no shellConfig, and services/PluginRegistryApi.qml carries this plugin's
+// manifest and nothing else -- so the service reads the document the host
+// writes. Parsing is here, where it can be tested, rather than in the QML.
+//
+// Null is "unreadable", which the service holds as not-yet-known rather than as
+// an empty config: an unreadable shell.json must not start a receiver the user
+// turned off.
+function shellConfigIn(text) {
+  var raw = String(text || "")
+  if (raw.trim() === "") return null
+  var parsed = null
+  try { parsed = JSON.parse(raw) } catch (e) { return null }
+  return isPlainObject(parsed) ? parsed : null
 }
 
 // Receiving is on unless the entry says otherwise, and off until the entry
 // exists at all, so a persisted "off" cannot be missed while the config is
-// still loading.
+// still loading. Off with no entry and off with a persisted false read the
+// same here on purpose -- the pair (barEntry() !== null, this) is what tells
+// them apart, and both mean "do not start the helper".
 function receiverEnabledIn(entry) {
-  return !!entry && entry.settings.receiverEnabled !== false
+  return !!entry && !!entry.settings && entry.settings.receiverEnabled !== false
 }
 
 // Which pane the two buttons last left selected. Anything unrecognised falls
@@ -204,6 +296,11 @@ function displayName(value, limit) {
   var max = Number(limit || 64)
   text = text.replace(/[<>]/g, "").replace(/[\x00-\x1F\x7F]/g, " ")
   text = text.replace(/\s+/g, " ").trim()
+  // A leading hyphen makes the name parse as a flag where it is passed to the
+  // Quick Share CLI as `--name <value>`, killing every invocation with a usage
+  // error: `--name "-Luna"` reports "unexpected argument '-L' found". Interior
+  // hyphens are fine and must survive.
+  text = text.replace(/^[-+]+/, "").trim()
   if (text.length > max) text = text.slice(0, max - 1) + "\u2026"
   return text
 }
@@ -333,4 +430,4 @@ function manifestMinHelperVersion(text, pluginId) {
   }
 }
 
-if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, enqueueIncoming, removeIncoming, currentIncoming, outgoingCommand, viewAfterOutgoing, parseShellConfig, barEntry, hasStringBarEntry, promoteStringBarEntry, receiverEnabledIn, modeIn, quickShareIconFor, displayName, deviceNameModeIn, customDeviceNameIn, generatedDeviceName, resolveDeviceName, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }
+if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, enqueueIncoming, removeIncoming, currentIncoming, outgoingCommand, viewAfterOutgoing, barEntry, entryWritable, shellConfigIn, receiverEnabledIn, modeIn, quickShareIconFor, displayName, deviceNameModeIn, customDeviceNameIn, generatedDeviceName, resolveDeviceName, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }

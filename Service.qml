@@ -41,19 +41,34 @@ Item {
   // the persisted state and the effective state are the same value, so they
   // cannot drift apart, and `receiverConfigured` is a fact about the config
   // rather than about which widget spoke first.
-  // Omarchy's third-party plugin security boundary (4.0.3+) injects a scoped
-  // PluginShellApi that no longer carries shellConfig. Legacy hosts still do.
-  // The service watches shell.json directly so the persisted state keeps
-  // arriving; the injected config stays authoritative when a host provides it.
-  property var fileShellConfig: null
-  readonly property bool hasLegacyShellConfig: !!shell && !!shell.shellConfig
-  readonly property var effectiveShellConfig: hasLegacyShellConfig ? shell.shellConfig : fileShellConfig
-  readonly property var configEntry: effectiveShellConfig
-    ? Model.barEntry(effectiveShellConfig, manifestPluginId)
-    : null
+  //
+  // Read from the file, not from the API. `shell` here is
+  // services/PluginShellApi.qml, which has no shellConfig: an installed
+  // third-party plugin gets `barConfig`, a deep copy of shellConfig.bar
+  // (shell.qml:326 publicBarConfig). Two things are missing from it, and both
+  // are load-bearing:
+  //
+  //   * plugins[]. updateEntryInline() falls back to the plugins[] marker
+  //     whenever the id is not a top-level bar.layout object entry -- a widget
+  //     a drawer hosts, a bare string entry, or a plugin enabled without being
+  //     placed on the bar. Reading only barConfig would not see what it wrote.
+  //   * which document it came from. barConfig is populated before the user's
+  //     shell.json is parsed, out of /usr/share/omarchy/config/omarchy/shell.json,
+  //     so a bare marker there would read as "receiver on by default" and bind
+  //     the LocalSend port for a user who had turned receiving off.
+  //
+  // One document, read once per change, is also one consistent answer: a split
+  // between barConfig and a disk read could disagree mid-write. Writes still go
+  // through the sanctioned API (updateEntryInline), and barConfig is what tells
+  // this file to re-read -- see shellConfigFile.
+  property var shellConfigDocument: null
+  readonly property var configEntry: Model.barEntry(shellConfigDocument, manifestPluginId)
   readonly property bool receiverConfigured: configEntry !== null
-  readonly property string moduleEntryId: configEntry ? configEntry.id : manifestPluginId
-  readonly property var pluginSettings: configEntry ? configEntry.settings : ({})
+  // Where a settings write lands: layout | plugins | items, or "" before the
+  // config has been read. Reported by the status IPC because the difference
+  // between "off" and "never resolved" is otherwise invisible from outside.
+  readonly property string settingsSource: configEntry ? String(configEntry.source) : ""
+  readonly property bool settingsWritable: Model.entryWritable(configEntry)
   readonly property bool receiverEnabled: Model.receiverEnabledIn(configEntry)
   // Which of the two panes is showing. Read from the same config entry as
   // receiverEnabled so the persisted value and the effective value cannot
@@ -65,14 +80,30 @@ Item {
   // custom string are persisted, because hostname and generated are derived.
   readonly property string deviceNameMode: Model.deviceNameModeIn(configEntry)
   readonly property string customDeviceName: Model.customDeviceNameIn(configEntry)
-  // Seeded from the TLS fingerprint so a generated name is stable for this
-  // machine and distinct from another machine sharing a hostname.
-  readonly property string advertisedName: Model.resolveDeviceName(configEntry, systemHostname, helperFingerprint !== "" ? helperFingerprint : systemHostname)
+  // One generated name, computed once. Panel.qml recomputing this locally
+  // produced a button that showed a different name than the machine actually
+  // advertised, and the bar builds one Panel per monitor, so a machine-wide
+  // value does not belong there.
+  //
+  // Seeded from the hostname, not the fingerprint: the fingerprint only arrives
+  // on the helper's ready event, so seeding from it changed the name after the
+  // helper had already launched and forced a spurious bounce every session.
+  readonly property string generatedName: Model.generatedDeviceName(systemHostname !== "" ? systemHostname : "nearby")
+  readonly property string advertisedName: Model.resolveDeviceName(configEntry, systemHostname, systemHostname !== "" ? systemHostname : "nearby")
   property string systemHostname: ""
   property string helperFingerprint: ""
   // Set while a rename is bouncing the helper, so the shutdown handler knows
   // not to turn the receiver off on the way through.
   property bool restartingForName: false
+  property int nameRestartDeferrals: 0
+  // A rename tears the helper down, which drops whatever it was carrying. The
+  // shutdown clears the queues, so by the time anything could notice the
+  // transfer is already gone -- the check has to happen before the shutdown is
+  // sent, not after.
+  readonly property bool transferInFlight: viewState === "sending" || viewState === "receiving"
+    || viewState === "incoming" || viewState === "pin"
+    || incomingQueue.length > 0 || pendingOutgoing !== null
+    || activeIncomingSession !== "" || outgoingTransferId !== ""
 
   property string pluginVersion: ""
   property string minHelperVersion: ""
@@ -148,50 +179,116 @@ Item {
   signal pinFocusRequested()
   signal incomingPinCleared()
   signal incomingPinFocusRequested()
+  signal customNameFocusRequested()
   signal focusRestoreRequested()
+
+  // Set before anything else is torn down. A shell.json write rebuilds the
+  // plugin tree, so this object is destroyed and rebuilt routinely, not only at
+  // shutdown, and a subprocess or a file load in flight outlives it. Its
+  // handlers are the child's own code and still run, but the parent they call
+  // into is already gone: QObjectPrivate::deleteChildren runs after the
+  // parent's QML metaobject is destroyed, so `root.anything()` throws a
+  // TypeError right inside the destruction path. Every such handler below
+  // reaches the engine through `owner`, captured at construction, and checks it
+  // is still callable first. This is the QuickShare.qml:172 crash, in the two
+  // files that have the shape.
+  property bool tearingDown: false
+  Component.onDestruction: tearingDown = true
 
   // /proc, not `hostname` -- no subprocess, and it is always readable.
   FileView {
+    readonly property var owner: root
     path: "/proc/sys/kernel/hostname"
     printErrors: false
-    onLoaded: root.systemHostname = String(text() || "").trim()
-    onLoadFailed: root.systemHostname = ""
+    // Sanitised here, not at the render site: this value is concatenated into a
+    // kit Button label, and the kit renders labels with Qt's default AutoText.
+    // displayName is idempotent, so resolveDeviceName applying it again is safe.
+    onLoaded: {
+      if (!owner || owner.tearingDown || typeof owner.noteHostname !== "function") return
+      owner.noteHostname(text())
+    }
+    onLoadFailed: {
+      if (!owner || owner.tearingDown || typeof owner.noteHostname !== "function") return
+      owner.noteHostname("")
+    }
   }
+  function noteHostname(raw) { root.systemHostname = Model.displayName(String(raw || ""), 64) }
 
   FileView {
+    readonly property var owner: root
     path: root.pluginDir + "/manifest.json"
     printErrors: false
     onLoaded: {
-      root.pluginVersion = Model.manifestVersion(text(), root.manifestPluginId)
-      root.minHelperVersion = Model.manifestMinHelperVersion(text(), root.manifestPluginId)
-      if (root.pluginVersion === "") {
-        root.errorText = "Nearby manifest version unavailable."
-        root.statusText = root.errorText
-      }
+      if (!owner || owner.tearingDown || typeof owner.noteManifest !== "function") return
+      owner.noteManifest(text())
     }
-    onLoadFailed: function(error) {
-      root.pluginVersion = ""
-      root.minHelperVersion = ""
-      root.errorText = "Nearby manifest version unavailable."
-      root.statusText = root.errorText
+    onLoadFailed: {
+      if (!owner || owner.tearingDown || typeof owner.noteManifest !== "function") return
+      owner.noteManifest("")
     }
   }
+  function noteManifest(raw) {
+    root.pluginVersion = Model.manifestVersion(raw, root.manifestPluginId)
+    root.minHelperVersion = Model.manifestMinHelperVersion(raw, root.manifestPluginId)
+    if (root.pluginVersion !== "") return
+    root.errorText = "Nearby manifest version unavailable."
+    root.statusText = root.errorText
+  }
 
-  // The scoped plugin shell no longer exposes shellConfig on modern Omarchy, so
-  // the persisted state is read from the shell.json Omarchy owns. Read-only:
-  // every write still goes back through the shell API, and watching the file
-  // also covers the shell's own atomic rewrite after it applies an update.
+  // The settings document. Read-only, and event-driven rather than polled:
+  // watchChanges covers an edit by anything else (the settings plugin, a hand
+  // edit, `omarchy plugin`), and the barConfig connection below covers this
+  // plugin's own write without waiting on inotify.
+  readonly property string shellConfigPath: (Quickshell.env("HOME") || "") + "/.config/omarchy/shell.json"
   FileView {
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/shell.json"
+    id: shellConfigFile
+    readonly property var owner: root
+    path: root.shellConfigPath
     watchChanges: true
     printErrors: false
     onLoaded: {
-      root.fileShellConfig = Model.parseShellConfig(text())
+      if (!owner || owner.tearingDown || typeof owner.noteShellConfig !== "function") return
+      owner.noteShellConfig(text())
     }
-    onLoadFailed: function(error) {
-      root.fileShellConfig = null
+    onLoadFailed: {
+      if (!owner || owner.tearingDown || typeof owner.noteShellConfig !== "function") return
+      owner.noteShellConfig("")
     }
     onFileChanged: reload()
+  }
+
+  // The host rewrites shell.json through updateEntryInline and re-pushes
+  // barConfig in the same pass (shell.qml:879, syncPluginApis), so a barConfig
+  // change is the in-process signal that the file on disk has moved.
+  Connections {
+    target: root.shell
+    ignoreUnknownSignals: true
+    function onBarConfigChanged() { shellConfigFile.reload() }
+  }
+
+  // Named so it can be cleared without wiping an unrelated failure: the
+  // manifest read reports through the same two properties.
+  readonly property string shellConfigErrorText: "Nearby cannot read "
+    + shellConfigPath + ", so its settings are unavailable."
+
+  function noteShellConfig(raw) {
+    var parsed = Model.shellConfigIn(raw)
+    if (parsed === null) {
+      // A read that lands inside the host's atomic replace must not stop a
+      // running receiver, so the last good document stands.
+      if (root.shellConfigDocument !== null) {
+        console.warn("nearby: shell.json unreadable, keeping the settings already read")
+        return
+      }
+      root.errorText = root.shellConfigErrorText
+      root.statusText = root.errorText
+      return
+    }
+    if (root.errorText === root.shellConfigErrorText) {
+      root.errorText = ""
+      root.statusText = "Starting receiver\u2026"
+    }
+    root.shellConfigDocument = parsed
   }
 
   // Registered once, from the one object there is one of. Registering this
@@ -232,7 +329,38 @@ Item {
     // The helper version and the floor it has to clear are reported here
     // because a mismatch otherwise shows up only as a panel that says it is
     // not ready, which is the same thing a port conflict looks like.
-    function status(): string { return JSON.stringify({enabled:root.receiverEnabled,ready:root.backendReady,running:backend.running,devices:root.devices.length,helper:root.helperVersion,requires:root.requiredHelperVersion,updateOffered:root.helperUpdateOffered}) }
+    //
+    // `configured` is reported beside `enabled` because they are two different
+    // failures that used to look identical from here: on 4.0.3 this plugin read
+    // its settings from shell.shellConfig, which the third-party API does not
+    // have, so the entry never resolved and the receiver reported itself off
+    // while shell.json said receiverEnabled true.
+    function status(): string { return JSON.stringify({enabled:root.receiverEnabled,configured:root.receiverConfigured,source:root.settingsSource,writable:root.settingsWritable,ready:root.backendReady,running:backend.running,devices:root.devices.length,helper:root.helperVersion,requires:root.requiredHelperVersion,updateOffered:root.helperUpdateOffered}) }
+    // What the host actually handed this plugin, for the next time settings do
+    // not stick. `shellConfig` is the property the plugin used to read and the
+    // one the API does not carry; `barConfigKeys` is what it carries instead.
+    function configProbe(): string {
+      var api = root.shell
+      return JSON.stringify({
+        haveShell: !!api,
+        shellConfig: typeof (api ? api.shellConfig : undefined),
+        barConfigKeys: api && api.barConfig ? Object.keys(api.barConfig).sort() : [],
+        barConfigHasPlugins: !!(api && api.barConfig && api.barConfig.plugins),
+        // Reported as a type only, never called: shell.qml:162
+        // mutateShellConfig() persists unconditionally, with no dirty check, so
+        // even a no-op mutator would rewrite shell.json. It returns false for
+        // this plugin regardless -- shell.qml:654 only wires it up for a
+        // manifest declaring the `bar` kind, and this one declares
+        // service + bar-widget.
+        mutateShellConfig: api ? typeof api.mutateShellConfig : "undefined",
+        updateEntryInline: api ? typeof api.updateEntryInline : "undefined",
+        configPath: root.shellConfigPath,
+        configRead: root.shellConfigDocument !== null,
+        entry: root.configEntry,
+        source: root.settingsSource,
+        writable: root.settingsWritable
+      })
+    }
   }
 
   function viewOpened() {
@@ -289,73 +417,113 @@ Item {
       return root.receiverConfigured && root.receiverEnabled && root.pluginVersion !== ""
     })
   }
+  // One writer. `shell.updateEntryInline(id, settings)` is the sanctioned
+  // per-entry writer on services/PluginShellApi.qml, and for a plugin's own id
+  // shell.qml:648 routes it straight to shell.qml:1078 updateEntryInline(),
+  // which replaces the whole entry with `{id, ...settings}` -- so every key the
+  // target already held has to be resent or it is dropped.
+  //
+  // targetSettings, not the merged view: the keys resent are the write target's
+  // own, so a value inherited from a drawer's items[] entry is never copied
+  // onto the plugins[] marker that shadows it.
+  //
+  // shell.mutateShellConfig() is not an option and no longer attempted.
+  // shell.qml:654 only wires it up for a manifest declaring the `bar` kind;
+  // this plugin is service + bar-widget, so it returned false on every call and
+  // the string-entry promotion path it guarded never ran. Nothing is lost: a
+  // bare string in bar.layout is not a write target for the host either, so the
+  // settings land on the plugins[] marker and Model.barEntry reads them back
+  // from there without rewriting the user's layout.
+  function persistSettings(patch) {
+    if (!shell || typeof shell.updateEntryInline !== "function") return false
+    if (!receiverConfigured) return false
+    var settings = Object.assign({}, configEntry.targetSettings, patch)
+    if (!settingsWritable) {
+      // Hosted inside a drawer with no plugins[] marker beside it. The host
+      // writes bar.layout's top level and plugins[], never a drawer's items,
+      // so there is nowhere for this to go and saying so beats a control that
+      // silently springs back.
+      console.warn("nearby: no writable shell.json entry for " + manifestPluginId
+        + " (hosted at " + settingsSource + "), settings cannot be saved")
+      errorText = "Nearby cannot save its settings: its shell.json entry is not one the shell writes."
+      statusText = errorText
+      return false
+    }
+    // Idempotent by the host's own comparison: an unchanged entry is not
+    // rewritten and returns false.
+    return shell.updateEntryInline(manifestPluginId, settings) === true
+  }
   // receiverEnabled follows the entry, so writing the entry is what turns the
   // receiver on or off. There is no second copy of the state to keep in step.
-  // Modern Omarchy exposes only the self-scoped updateEntryInline(), which
-  // updates Nearby's own entry. The string-form promotion needs a real host
-  // config object, so it stays confined to legacy hosts that still inject
-  // shell.shellConfig: on a scoped shell a mutateShellConfig() that exists but
-  // is denied must not capture the toggle and drop the write.
-  function persistReceiverEnabled(enabled) {
-    if (!shell) return
-    var settings = Object.assign({}, pluginSettings, { receiverEnabled: enabled })
-    if (hasLegacyShellConfig
-        && Model.hasStringBarEntry(effectiveShellConfig, moduleEntryId)
-        && typeof shell.mutateShellConfig === "function") {
-      shell.mutateShellConfig(function(config) {
-        Model.promoteStringBarEntry(config, moduleEntryId, settings)
-      })
-      return
-    }
-    shell.updateEntryInline(moduleEntryId, settings)
-  }
-  function persistMode(next) {
-    if (!shell) return
-    var settings = Object.assign({}, pluginSettings, { mode: next })
-    if (Model.hasStringBarEntry(shell.shellConfig, moduleEntryId)
-        && typeof shell.mutateShellConfig === "function") {
-      shell.mutateShellConfig(function(config) {
-        Model.promoteStringBarEntry(config, moduleEntryId, settings)
-      })
-      return
-    }
-    shell.updateEntryInline(moduleEntryId, settings)
-  }
+  function persistReceiverEnabled(enabled) { return persistSettings({ receiverEnabled: enabled }) }
+  function persistMode(next) { return persistSettings({ mode: next }) }
   // Switching panes abandons neither transfer: the LocalSend helper keeps
   // receiving while the Quick Share pane is showing, and a `qs send` in flight
   // survives a switch back. Only the cursor and the per-pane target reset.
   function persistDeviceName(mode, custom) {
-    if (!shell) return
     var wanted = (mode === "hostname" || mode === "generated" || mode === "custom") ? mode : "hostname"
-    var settings = Object.assign({}, pluginSettings, { deviceNameMode: wanted, deviceName: String(custom || "") })
-    if (Model.hasStringBarEntry(shell.shellConfig, moduleEntryId)
-        && typeof shell.mutateShellConfig === "function") {
-      shell.mutateShellConfig(function(config) {
-        Model.promoteStringBarEntry(config, moduleEntryId, settings)
-      })
-      return
-    }
-    shell.updateEntryInline(moduleEntryId, settings)
+    return persistSettings({ deviceNameMode: wanted, deviceName: String(custom || "") })
   }
   function chooseNameMode(mode) { persistDeviceName(mode, customDeviceName) }
-  function submitCustomName(text) { persistDeviceName("custom", String(text || "")) }
+  function submitCustomName(text) {
+    var next = Model.displayName(text, 32)
+    // An empty submission used to persist "", which resolveDeviceName then
+    // ignores in favour of the hostname -- so a stray Enter silently discarded
+    // the name with no confirmation.
+    if (next === "") return
+    persistDeviceName("custom", next)
+  }
+  function requestCustomNameFocus() {
+    if (deviceNameMode !== "custom") persistDeviceName("custom", customDeviceName)
+    customNameFocusRequested()
+  }
   function openDeviceName() { viewState = "device_name"; cursorRequested(0) }
-  function closeDeviceName() { viewState = "nearby"; cursorRequested(0); focusRestoreRequested() }
+  function closeDeviceName() {
+    viewState = "nearby"
+    cursorRequested(0)
+    focusRestoreRequested()
+    // A rename bounces the helper, and the post-restart `ready` skips discovery
+    // because the user is still sitting in this pane -- so returning to the
+    // device list showed "No devices nearby" with discovery switched off.
+    if (anyViewOpen && receiverEnabled && backendReady) startDiscovery()
+  }
 
   // The helper reads its alias once, at startup, so a rename means bouncing it.
   // Debounced because a custom name is typed one character at a time and the
   // port would otherwise be bound and unbound per keystroke.
   onAdvertisedNameChanged: {
     if (!receiverEnabled || !backend.running || shutdownPending) return
+    nameRestartDeferrals = 0
     nameRestart.restart()
   }
   function restartForName() {
     if (!receiverEnabled || shutdownPending || !backend.running) return
+    if (transferInFlight) {
+      // Wait for the transfer rather than killing it. Bounded so a wedged
+      // session cannot postpone the rename forever; past the budget the rename
+      // is abandoned rather than forced, because losing a transfer is worse
+      // than advertising the old name until the next restart.
+      if (nameRestartDeferrals >= 30) { nameRestartDeferrals = 0; return }
+      nameRestartDeferrals++
+      nameRestart.restart()
+      return
+    }
+    nameRestartDeferrals = 0
     restartingForName = true
     shutdownPending = true
     statusText = "Applying new name\u2026"
     send({command:"shutdown"})
-    receiverShutdownFallback.restart()
+    nameShutdownFallback.restart()
+  }
+  // Not receiverShutdownFallback. Its 250 ms is safe for toggleReceiver, where
+  // firing early still takes the helper down because the running binding breaks.
+  // On a rename receiverEnabled stays true, so an early fire would clear the
+  // flags while the helper is still up and hand its real exit to the
+  // unexpected-stop path.
+  function finishNameShutdown() {
+    if (!restartingForName) return
+    if (backend.running) { nameShutdownFallback.restart(); return }
+    finishReceiverShutdown()
   }
 
   function setMode(next) {
@@ -395,6 +563,13 @@ Item {
       restartingForName = false
       backendReady = false
       devices = []
+      // The shutdown cleared the queues, so a transfer view left standing shows
+      // a frozen progress bar with no route out -- goBack closes the popup for
+      // those states and the post-restart ready does not touch viewState.
+      if (viewState !== "device_name" && viewState !== "nearby") {
+        viewState = "nearby"
+        cursorRequested(0)
+      }
       selectedDevice = null
       statusText = "Starting receiver\u2026"
       errorText = ""
@@ -666,8 +841,12 @@ Item {
     else if (event.event === "error") { viewState="error"; errorText=String(event.message||"Transfer failed"); statusText=errorText }
   }
 
+  // Every handler below reaches the engine through `owner` and checks it is
+  // still callable: a helper's exit, a line of its output, or a launch failure
+  // can all arrive after this object has been destroyed. See tearingDown.
   Process {
     id: backend
+    readonly property var owner: root
     property bool launched: false
     command: [root.pluginDir + "/bin/nearby-helper-launcher"]
     // The helper takes its advertised alias from HOSTNAME at startup, and
@@ -682,15 +861,18 @@ Item {
     // itself on the network for a user who had turned the receiver off.
     running: root.receiverConfigured && root.receiverEnabled && root.pluginVersion !== ""
     stdinEnabled: true
-    stdout: SplitParser { onRead: function(line) { root.handleEvent(Model.parseLine(line)) } }
+    stdout: SplitParser {
+      readonly property var owner: root
+      onRead: function(line) {
+        if (!owner || owner.tearingDown || typeof owner.handleEvent !== "function") return
+        owner.handleEvent(Model.parseLine(line))
+      }
+    }
     stderr: SplitParser { onRead: function(line) { console.warn("nearby backend", line) } }
     onStarted: {
       backend.launched=true
-      root.backendAcceptedThisRun=false
-      root.backendVersionMismatch=false
-      root.helperMissing=false
-      root.backendStartupFailureCode=""
-      root.backendStartupFailurePort=0
+      if (!owner || owner.tearingDown || typeof owner.noteBackendStarted !== "function") return
+      owner.noteBackendStarted()
     }
     // A helper that is missing rather than failing never reaches onExited:
     // Quickshell returns running to false without an exit code, the same way
@@ -699,37 +881,66 @@ Item {
     onRunningChanged: {
       if (running) { backend.launched=false; return }
       if (backend.launched) return
-      // `running` is a binding, so it also drops when the receiver is turned
-      // off or the manifest version goes away. Only a helper we still want
-      // running counts as one that failed to launch.
-      if (!root.receiverEnabled || root.pluginVersion === "") return
-      root.backendReady=false
-      root.helperMissing=true
-      root.reportFailure("Helper unavailable",
-        "Nearby could not prepare its verified helper. Connect to the internet and try Retry helper, or build it with ./build.sh.")
+      if (!owner || owner.tearingDown || typeof owner.noteBackendNeverLaunched !== "function") return
+      owner.noteBackendNeverLaunched()
     }
-    onExited: function(code) { root.handleBackendExit(code) }
+    onExited: function(code) {
+      if (!owner || owner.tearingDown || typeof owner.handleBackendExit !== "function") return
+      owner.handleBackendExit(code)
+    }
+  }
+  function noteBackendStarted() {
+    backendAcceptedThisRun=false
+    backendVersionMismatch=false
+    helperMissing=false
+    backendStartupFailureCode=""
+    backendStartupFailurePort=0
+  }
+  function noteBackendNeverLaunched() {
+    // `running` is a binding, so it also drops when the receiver is turned
+    // off or the manifest version goes away. Only a helper we still want
+    // running counts as one that failed to launch.
+    if (!receiverEnabled || pluginVersion === "") return
+    backendReady=false
+    helperMissing=true
+    reportFailure("Helper unavailable",
+      "Nearby could not prepare its verified helper. Connect to the internet and try Retry helper, or build it with ./build.sh.")
   }
   Process {
     id: helperUpdater
+    readonly property var owner: root
     property bool launched: false
     command: [root.pluginDir + "/bin/nearby-repair-helper"]
     running: false
-    stdout: SplitParser { onRead: function(line) { root.handleUpdaterEvent(Model.parseLine(line)) } }
+    stdout: SplitParser {
+      readonly property var owner: root
+      onRead: function(line) {
+        if (!owner || owner.tearingDown || typeof owner.handleUpdaterEvent !== "function") return
+        owner.handleUpdaterEvent(Model.parseLine(line))
+      }
+    }
     stderr: SplitParser { onRead: function(line) { console.warn("nearby helper repair", line) } }
     onStarted: helperUpdater.launched=true
     // Same missing-command signal the helper and the file chooser use: no exit
     // code ever arrives, so an absent repair command has to be caught here.
     onRunningChanged: {
       if (running || helperUpdater.launched) return
-      root.helperUpdating=false
-      root.helperUpdateStatus=""
-      root.helperUpdateError="The Nearby helper repair command is missing. Run omarchy plugin update oma.nearby."
+      if (!owner || owner.tearingDown || typeof owner.noteUpdaterNeverLaunched !== "function") return
+      owner.noteUpdaterNeverLaunched()
     }
-    onExited: function(code) { root.finishHelperUpdate(code) }
+    onExited: function(code) {
+      if (!owner || owner.tearingDown || typeof owner.finishHelperUpdate !== "function") return
+      owner.finishHelperUpdate(code)
+    }
+  }
+  function noteUpdaterNeverLaunched() {
+    helperUpdating=false
+    helperUpdateStatus=""
+    helperUpdateError="The Nearby helper repair command is missing. Run omarchy plugin update oma.nearby."
   }
   Timer { id: backendRestart; property int attempts: 0; interval: 1000; repeat: false; onTriggered: if (root.receiverEnabled && !backend.running) root.bindBackendRunning() }
   Timer { id: nameRestart; interval: 1200; repeat: false; onTriggered: root.restartForName() }
+  Timer { id: nameShutdownFallback; interval: 2000; repeat: false; onTriggered: root.finishNameShutdown() }
   Timer { id: receiverShutdownFallback; interval: 250; repeat: false; onTriggered: root.finishReceiverShutdown() }
 
   QuickShare {

@@ -58,6 +58,10 @@ assert.match(source, /function finishHelperUpdate[\s\S]*?if \(!backend\.running\
 assert.match(source, /Model\.helperSatisfies\(requiredHelperVersion, helperVersion\)/,
   "the helper is checked against the floor the manifest declares, not against an exact version")
 
+// Pulls a function out of Service.qml by brace matching. Line comments are
+// skipped rather than scanned: an apostrophe in prose ("the drawer's items")
+// used to open a string state that never closed, and the extractor then ran off
+// the end of the file reporting the function as unterminated.
 function extractFunction(name) {
   const marker = `function ${name}`
   const start = source.indexOf(marker)
@@ -74,7 +78,19 @@ function extractFunction(name) {
       else if (character === quote) quote = ""
       continue
     }
-    if (character === '"' || character === "'") quote = character
+    if (character === "/" && source[index + 1] === "/") {
+      const end = source.indexOf("\n", index)
+      if (end === -1) break
+      index = end
+      continue
+    }
+    if (character === "/" && source[index + 1] === "*") {
+      const end = source.indexOf("*/", index)
+      if (end === -1) break
+      index = end + 1
+      continue
+    }
+    if (character === '"' || character === "'" || character === "`") quote = character
     else if (character === "{") depth++
     else if (character === "}" && --depth === 0) return source.slice(start, index + 1)
   }
@@ -92,18 +108,6 @@ function backendEligible(state) {
   assert.match(expression, /receiverConfigured/,
     "eligibility must depend on having read the config, not only on the receiver switch")
   return vm.runInNewContext(`(${expression})`, {root: state})
-}
-
-// configEntry is a binding too, and with the scoped shell it derives from
-// effectiveShellConfig instead of shell.shellConfig. Evaluating it is what
-// covers the modern host: the fallback file becomes the receiver's source.
-function configEntry(state) {
-  return vm.runInNewContext(`(${extractBinding("configEntry")})`, {
-    Model,
-    manifestPluginId: "oma.nearby",
-    shell: state.shell,
-    get effectiveShellConfig() { return state.effectiveShellConfig },
-  })
 }
 
 // The version floor is a binding too, so it comes out of the source rather
@@ -148,8 +152,10 @@ function helperDerived(state) {
 
 const functionNames = [
   "viewOpened", "viewClosed", "notificationNeeded",
-  "send", "utf8ByteLength", "bindBackendRunning", "persistReceiverEnabled", "toggleReceiver", "finishReceiverShutdown",
+  "send", "utf8ByteLength", "bindBackendRunning", "persistSettings", "persistReceiverEnabled", "persistMode",
+  "toggleReceiver", "finishReceiverShutdown",
   "persistDeviceName", "chooseNameMode", "submitCustomName", "restartForName",
+  "closeDeviceName", "requestCustomNameFocus", "finishNameShutdown",
   "startDiscovery", "forceFullDiscovery", "stopDiscovery", "chooseDevice", "clearTarget",
   "openIncomingPinSettings", "beginIncomingPinEdit", "requestDisableIncomingPin",
   "cancelIncomingPinSettings", "submitIncomingPin", "confirmDisableIncomingPin",
@@ -196,6 +202,8 @@ function engine(initial = {}) {
     deviceNameMode: "hostname",
     customDeviceName: "",
     restartingForName: false,
+    nameRestartDeferrals: 0,
+    nameShutdownFallback: {restart: () => {}, stop: () => {}},
     nameRestart: {restart: () => {}, stop: () => {}},
     quickShareEngine: {
       available: true,
@@ -206,8 +214,12 @@ function engine(initial = {}) {
       scan: () => { quickShareCalls.push("scan") },
       refreshDependencies: () => { quickShareCalls.push("refreshDependencies") },
     },
-    moduleEntryId: "t1nk33r.nearby-share",
-    pluginSettings: {},
+    // The real config-derived properties. `shell` is the third-party surface
+    // from services/PluginShellApi.qml: updateEntryInline and no shellConfig.
+    manifestPluginId: "t1nk33r.nearby-share",
+    configEntry: {id: "t1nk33r.nearby-share", settings: {}, source: "layout", targetSettings: {}},
+    settingsSource: "layout",
+    settingsWritable: true,
     receiverConfigured: true,
     openViewCount: 1,
     anyViewOpen: true,
@@ -253,17 +265,17 @@ function engine(initial = {}) {
     ...initial,
   }
   Object.defineProperty(context, "incoming", {get() { return Model.currentIncoming(context.incomingQueue) }})
+  // transferInFlight is a readonly binding, so evaluate the real expression out
+  // of the source rather than stubbing a constant -- a stub would let the
+  // "do not tear the helper down mid-transfer" tests pass against a binding
+  // that no longer checks anything.
+  Object.defineProperty(context, "transferInFlight", {
+    enumerable: true,
+    get() { return vm.runInNewContext(`(${extractBinding("transferInFlight")})`, context) },
+  })
   Object.defineProperty(context, "requiredHelperVersion", {
     enumerable: true,
     get() { return requiredHelperVersion(context) },
-  })
-  Object.defineProperty(context, "hasLegacyShellConfig", {
-    enumerable: true,
-    get() { return !!(context.shell && context.shell.shellConfig) },
-  })
-  Object.defineProperty(context, "effectiveShellConfig", {
-    enumerable: true,
-    get() { return context.hasLegacyShellConfig ? context.shell.shellConfig : context.fileShellConfig },
   })
   for (const derived of ["helperUpdateOffered", "helperUpdateDetail"]) {
     Object.defineProperty(context, derived, {
@@ -1108,189 +1120,172 @@ for (const busy of ["sending", "receiving", "pin"]) {
     "a persisted off receiver must not become eligible at any point during startup")
 }
 
-{
-  // The persisted value and the effective value are one value, so they cannot
-  // diverge: there is nothing to synchronize and no snapshot to go stale.
-  const config = {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share", receiverEnabled: false}]}}, plugins: []}
-  const state = engine({shell: {shellConfig: config, updateEntryInline: () => true}})
-  const entry = Model.barEntry(config, "t1nk33r.nearby-share")
-  assert.equal(Model.receiverEnabledIn(entry), false)
-  assert.deepEqual(entry.settings, {receiverEnabled: false})
-  assert.equal(entry.id, "t1nk33r.nearby-share")
-  // Turning the receiver on writes the entry rather than a second copy of the
-  // state, so a later read of the config is what makes it effective.
-  const writes = []
-  // Objects built inside the vm realm carry that realm's prototype, so they
-  // are compared by value.
-  state.shell = {shellConfig: config, updateEntryInline: (id, settings) => { writes.push([id, JSON.parse(JSON.stringify(settings))]); return true }}
-  state.persistReceiverEnabled(true)
-  assert.deepEqual(writes, [["t1nk33r.nearby-share", {receiverEnabled: true}]],
-    "toggling must persist the entry, which is the only place the state lives")
-}
-
-{
-  // Other keys on the entry survive a receiver toggle.
-  const config = {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share", tooltip: "keep me"}]}}, plugins: []}
-  const entry = Model.barEntry(config, "t1nk33r.nearby-share")
-  const writes = []
-  const state = engine({
-    pluginSettings: entry.settings,
-    moduleEntryId: entry.id,
-    shell: {shellConfig: config, updateEntryInline: (id, settings) => { writes.push(JSON.parse(JSON.stringify(settings))); return true }},
-  })
-  state.persistReceiverEnabled(false)
-  assert.deepEqual(writes, [{tooltip: "keep me", receiverEnabled: false}],
-    "persisting the receiver must not drop unrelated inline settings")
-}
-
-{
-  // Quattro accepts string-form entries in bar.layout, but its existing
-  // updateEntryInline() only matches objects through entry.id. Persisting from
-  // a string must therefore promote that exact slot to object form rather than
-  // silently leaving the authoritative receiver state on.
-  const config = {
-    version: 1,
-    bar: {layout: {right: ["other.before", "t1nk33r.nearby-share", {id: "other.after", x: 1}]}},
-    plugins: [],
-  }
-  const shell = {
-    shellConfig: config,
+// A stand-in for the surface the host hands an installed third-party plugin:
+// services/PluginShellApi.qml. `shellConfig` is deliberately absent, because
+// the API does not have it -- reading it is what made this plugin report itself
+// disabled on 4.0.3 while shell.json said receiverEnabled true.
+//
+// updateEntryInline reproduces shell.qml:1078: every top-level bar.layout
+// object entry, else every plugins[] marker, never a drawer's items[], and no
+// write at all when nothing changed.
+//
+// NOTE (merge): upstream still carries the legacy shell.shellConfig /
+// fileShellConfig compatibility assertions here. They are kept deleted: this
+// fork replaced that whole path, so hasLegacyShellConfig, effectiveShellConfig
+// and the fallback-file watcher no longer exist to assert on.
+function hostShell(document) {
+  const api = {
+    document: JSON.parse(JSON.stringify(document)),
+    writes: [],
     updateEntryInline(id, settings) {
-      const entries = this.shellConfig.bar.layout.right
-      const index = entries.findIndex(entry => entry && entry.id === id)
-      if (index < 0) return false
-      entries[index] = {id, ...settings}
+      api.writes.push([id, JSON.parse(JSON.stringify(settings))])
+      const copy = JSON.parse(JSON.stringify(api.document))
+      const next = {id, ...JSON.parse(JSON.stringify(settings))}
+      let found = false
+      let dirty = false
+      for (const section of ["left", "center", "right"]) {
+        const list = (copy.bar && copy.bar.layout && copy.bar.layout[section]) || []
+        for (let index = 0; index < list.length; index++) {
+          if (!list[index] || String(list[index].id || "") !== id) continue
+          if (JSON.stringify(list[index]) !== JSON.stringify(next)) { list[index] = next; dirty = true }
+          found = true
+        }
+      }
+      if (!found) {
+        const markers = copy.plugins || []
+        for (let index = 0; index < markers.length; index++) {
+          if (!markers[index] || markers[index].id !== id) continue
+          if (JSON.stringify(markers[index]) !== JSON.stringify(next)) { markers[index] = next; dirty = true }
+        }
+      }
+      if (!dirty) return false
+      api.document = copy
       return true
     },
-    mutateShellConfig(mutator) {
-      const copy = JSON.parse(JSON.stringify(this.shellConfig))
-      mutator(copy)
-      this.shellConfig = copy
-    },
   }
-  const state = engine({
-    shell,
-    moduleEntryId: "t1nk33r.nearby-share",
-    pluginSettings: {},
-  })
+  return api
+}
 
-  state.persistReceiverEnabled(false)
-  assert.deepEqual(shell.shellConfig.bar.layout.right,
-    ["other.before", {id: "t1nk33r.nearby-share", receiverEnabled: false}, {id: "other.after", x: 1}],
-    "persisting off must promote the matching string in place without changing its neighbors")
-  const offEntry = Model.barEntry(shell.shellConfig, "t1nk33r.nearby-share")
-  assert.equal(Model.receiverEnabledIn(offEntry), false)
+// What the service's bindings do once the host re-pushes barConfig and the
+// FileView reloads: resolve the entry again from the document on disk.
+function reread(state, api) {
+  state.configEntry = Model.barEntry(api.document, "t1nk33r.nearby-share")
+  state.receiverConfigured = state.configEntry !== null
+  state.settingsSource = state.configEntry ? state.configEntry.source : ""
+  state.settingsWritable = Model.entryWritable(state.configEntry)
+  state.receiverEnabled = Model.receiverEnabledIn(state.configEntry)
+  return state.configEntry
+}
+
+function nearbyEngine(document, extra = {}) {
+  const api = hostShell(document)
+  const state = engine({shell: api, ...extra})
+  reread(state, api)
+  return {state, api}
+}
+
+{
+  // The persisted value and the effective value are one value, so they cannot
+  // diverge: there is nothing to synchronize and no snapshot to go stale. The
+  // round trip is the test -- what the plugin reads back has to be what it
+  // wrote, whichever entry the host chose to write.
+  const {state, api} = nearbyEngine({version: 1,
+    bar: {layout: {right: [{id: "t1nk33r.nearby-share", receiverEnabled: false, tooltip: "keep me"}]}},
+    plugins: [{id: "t1nk33r.nearby-share"}]})
+  assert.equal(state.settingsSource, "layout",
+    "a top-level object entry is what the host writes, even with a marker beside it")
+  assert.equal(state.receiverEnabled, false)
+
+  assert.equal(state.persistReceiverEnabled(true), true)
+  assert.deepEqual(api.writes, [["t1nk33r.nearby-share", {receiverEnabled: true, tooltip: "keep me"}]],
+    "toggling persists the entry, unrelated inline settings and all")
+  assert.equal(Model.receiverEnabledIn(reread(state, api)), true,
+    "and the value read back is the value written")
+  assert.deepEqual(api.document.plugins, [{id: "t1nk33r.nearby-share"}],
+    "the marker the host did not choose is left exactly as it was")
+
+  // Idempotent: writing the value that is already there changes nothing.
+  api.writes.length = 0
+  assert.equal(state.persistReceiverEnabled(true), false)
+  assert.equal(Model.receiverEnabledIn(reread(state, api)), true)
+
+  state.persistMode("quickshare")
+  const entry = reread(state, api)
+  assert.equal(Model.modeIn(entry), "quickshare")
+  assert.equal(Model.receiverEnabledIn(entry), true, "and one setting does not clear another")
+  assert.equal(entry.settings.tooltip, "keep me")
+  assert.equal(api.document.bar.layout.right.length, 1, "no duplicate entry is ever created")
+}
+
+{
+  // A bare string in bar.layout. The host matches entries through entry.id,
+  // which a string does not have, so the write lands on the plugins[] marker --
+  // and the read has to follow it there. The old code tried to promote the
+  // string to object form through shell.mutateShellConfig(), which shell.qml:654
+  // never wires up for a service + bar-widget plugin.
+  const {state, api} = nearbyEngine({version: 1,
+    bar: {layout: {right: ["other.before", "t1nk33r.nearby-share", {id: "other.after", x: 1}]}},
+    plugins: [{id: "t1nk33r.nearby-share"}]})
+  assert.equal(state.settingsSource, "plugins")
+
+  assert.equal(state.persistReceiverEnabled(false), true)
+  assert.deepEqual(api.document.bar.layout.right,
+    ["other.before", "t1nk33r.nearby-share", {id: "other.after", x: 1}],
+    "persisting must not rewrite the user's layout")
+  assert.deepEqual(api.document.plugins, [{id: "t1nk33r.nearby-share", receiverEnabled: false}])
+  assert.equal(Model.receiverEnabledIn(reread(state, api)), false)
   assert.equal(backendEligible({receiverConfigured: true, receiverEnabled: false, pluginVersion: "1.0.6-dev"}), false)
 
-  state.pluginSettings = offEntry.settings
   state.persistReceiverEnabled(true)
-  const onEntry = Model.barEntry(shell.shellConfig, "t1nk33r.nearby-share")
-  assert.equal(Model.receiverEnabledIn(onEntry), true)
+  assert.equal(Model.receiverEnabledIn(reread(state, api)), true)
   assert.equal(backendEligible({receiverConfigured: true, receiverEnabled: true, pluginVersion: "1.0.6-dev"}), true)
-  assert.equal(shell.shellConfig.bar.layout.right.filter(entry =>
-    entry === "t1nk33r.nearby-share" || (entry && entry.id === "t1nk33r.nearby-share")).length, 1,
-    "promoting and toggling a string-form entry must not create a duplicate")
+  assert.equal(api.document.plugins.length, 1, "and toggling must not duplicate the marker")
 }
 
-// Omarchy 4.0.3+ injects a scoped PluginShellApi that no longer carries
-// shellConfig. The fallback file is what the receiver reads, and a valid one
-// must not permanently resolve the toggle to off.
 {
-  const state = engine({
-    fileShellConfig: {version: 1, bar: {layout: {right: [{id: "oma.nearby"}]}}, plugins: []},
-    shell: {},
-  })
-  assert.equal(Object.hasOwn(state.shell, "shellConfig"), false,
-    "the scoped shell test fixture must model the missing shellConfig")
-  assert.equal(Model.receiverEnabledIn(configEntry(state)), true,
-    "a valid fallback entry without a receiver setting means on, like the injected config")
-}
-{
-  const state = engine({
-    fileShellConfig: {version: 1, bar: {layout: {right: [{id: "oma.nearby", receiverEnabled: false}]}}, plugins: []},
-    shell: {},
-  })
-  assert.equal(Model.receiverEnabledIn(configEntry(state)), false,
-    "the fallback file must keep a persisted off the source the toggle reads")
+  // Hosted inside a drawer. The host writes the marker t1nk33r.nook's absorb
+  // created, never the items[] entry, so the marker is where the round trip
+  // has to close.
+  const {state, api} = nearbyEngine({version: 1,
+    bar: {layout: {right: [{id: "t1nk33r.nook", items: [{id: "t1nk33r.nearby-share", mode: "quickshare"}]}]}},
+    plugins: [{id: "t1nk33r.nook"}, {id: "t1nk33r.nearby-share"}]})
+  assert.equal(state.settingsSource, "plugins")
+  assert.equal(state.receiverEnabled, true)
+  assert.equal(Model.modeIn(state.configEntry), "quickshare",
+    "the drawer's items entry still supplies what the marker does not carry")
+
+  assert.equal(state.persistReceiverEnabled(false), true)
+  assert.deepEqual(api.document.bar.layout.right[0].items, [{id: "t1nk33r.nearby-share", mode: "quickshare"}],
+    "the drawer's contents are not touched, and the mode it declares is not copied out")
+  assert.deepEqual(api.document.plugins[1], {id: "t1nk33r.nearby-share", receiverEnabled: false})
+  const entry = reread(state, api)
+  assert.equal(Model.receiverEnabledIn(entry), false)
+  assert.equal(Model.modeIn(entry), "quickshare")
 }
 
-// A legacy host that still injects the real shell.shellConfig keeps using it:
-// the file must never override the live injected config.
 {
-  const legacy = {version: 1, bar: {layout: {right: [{id: "oma.nearby", receiverEnabled: true}]}}, plugins: []}
-  const fileOff = {version: 1, bar: {layout: {right: [{id: "oma.nearby", receiverEnabled: false}]}}, plugins: []}
-  const state = engine({shell: {shellConfig: legacy}, fileShellConfig: fileOff})
-  assert.equal(state.hasLegacyShellConfig, true)
-  assert.equal(Model.receiverEnabledIn(configEntry(state)), true,
-    "a real injected shellConfig stays authoritative on legacy hosts")
+  // Hosted with no marker: there is nothing the host will write, so the plugin
+  // has to say so rather than offer a switch that springs back.
+  const {state, api} = nearbyEngine({version: 1,
+    bar: {layout: {right: [{id: "t1nk33r.nook", items: [{id: "t1nk33r.nearby-share"}]}]}},
+    plugins: [{id: "t1nk33r.nook"}]})
+  assert.equal(state.settingsSource, "items")
+  assert.equal(state.settingsWritable, false)
+  assert.equal(state.persistReceiverEnabled(false), false)
+  assert.deepEqual(api.writes, [], "and it does not ask the host to write nowhere")
+  assert.match(state.errorText, /cannot save its settings/)
+  assert.equal(state.statusText, state.errorText)
 }
 
-// Config reload: the watched file is what a modern shell update flips, and a
-// restart reads the file again, so the persisted value must become effective.
 {
-  const state = engine({fileShellConfig: {version: 1, bar: {layout: {right: []}}, plugins: []}, shell: {}})
-  assert.equal(configEntry(state), null, "a file that does not contain the entry keeps the receiver off")
-  state.fileShellConfig = {version: 1, bar: {layout: {right: [{id: "oma.nearby", receiverEnabled: true}]}}, plugins: []}
-  assert.equal(Model.receiverEnabledIn(configEntry(state)), true,
-    "a refreshed fallback must make the persisted receiver state effective")
+  // Nothing to write into at all: no entry means the config has not been read,
+  // and a write before then would invent settings for an unknown target.
+  const api = hostShell({version: 1, bar: {layout: {right: []}}, plugins: []})
+  const state = engine({shell: api, configEntry: null, receiverConfigured: false,
+    settingsSource: "", settingsWritable: false})
+  assert.equal(state.persistReceiverEnabled(false), false)
+  assert.deepEqual(api.writes, [])
 }
-
-// OFF -> ON on a scoped shell must persist through the self-scoped
-// updateEntryInline(), and a mutateShellConfig() that only exists as a denied
-// capability must never be called or swallow the write.
-{
-  const config = {version: 1, bar: {layout: {right: [{id: "oma.nearby", receiverEnabled: false}]}}, plugins: []}
-  const writes = []
-  const mutates = []
-  const state = engine({
-    fileShellConfig: config,
-    moduleEntryId: "oma.nearby",
-    pluginSettings: {receiverEnabled: false},
-    shell: {
-      updateEntryInline(id, settings) { writes.push([id, JSON.parse(JSON.stringify(settings))]); return true },
-      mutateShellConfig() { mutates.push(true); return false },
-    },
-  })
-  state.persistReceiverEnabled(true)
-  assert.deepEqual(writes, [["oma.nearby", {receiverEnabled: true}]],
-    "a scoped shell must persist through the self-scoped updateEntryInline()")
-  assert.deepEqual(mutates, [],
-    "a denied mutateShellConfig() must never capture the toggle and drop the write")
-  assert.equal(backendEligible({receiverConfigured: true, receiverEnabled: true, pluginVersion: "1.0.6-dev"}), true,
-    "the persisted ON must leave the helper eligible to start")
-}
-
-// ON -> OFF on a scoped shell preserves the entry's unrelated settings.
-{
-  const config = {version: 1, bar: {layout: {right: [{id: "oma.nearby", tooltip: "keep me", receiverEnabled: true}]}}, plugins: []}
-  const writes = []
-  const state = engine({
-    fileShellConfig: config,
-    moduleEntryId: "oma.nearby",
-    pluginSettings: {tooltip: "keep me", receiverEnabled: true},
-    shell: {updateEntryInline(id, settings) { writes.push(JSON.parse(JSON.stringify(settings))); return true }},
-  })
-  state.persistReceiverEnabled(false)
-  assert.deepEqual(writes, [{tooltip: "keep me", receiverEnabled: false}],
-    "an OFF write on a scoped shell must preserve unrelated inline settings")
-  assert.equal(backendEligible({receiverConfigured: true, receiverEnabled: false, pluginVersion: "1.0.6-dev"}), false)
-}
-
-// No unguarded shell.shellConfig read may remain in the service: the only
-// allowed reads sit behind hasLegacyShellConfig as the legacy compatibility
-// path.
-assert.doesNotMatch(source, /Model\.barEntry\(shell\.shellConfig/,
-  "configEntry must derive from the compatibility source, not shell.shellConfig")
-assert.doesNotMatch(source, /Model\.hasStringBarEntry\(shell\.shellConfig/,
-  "string promotion must be decided from the compatibility source")
-assert.match(source, /readonly property bool hasLegacyShellConfig:\s*!!shell && !!shell\.shellConfig/,
-  "the legacy-host discriminator must require a truthy shell.shellConfig")
-assert.match(source, /readonly property var effectiveShellConfig:\s*hasLegacyShellConfig \? shell\.shellConfig : fileShellConfig/,
-  "the compatibility source must prefer the live injected config when present")
-assert.match(source, /watchChanges:\s*true/,
-  "the fallback shell.json watcher must track the shell's atomic rewrites")
-assert.match(source, /onFileChanged:\s*reload\(\)/,
-  "the watcher must refresh after the shell persists a settings update")
 
 // The Rust registry caps its peers, and the device list is that registry's
 // frontend mirror: both individual `device` events and `peer_snapshot` results
@@ -1355,6 +1350,213 @@ assert.match(source,
   state.persistDeviceName("nonsense", "")
   assert.equal(writes[0].deviceNameMode, "hostname",
     "an unknown mode is normalised before it reaches the config")
+}
+
+
+// --- an empty custom name must not silently revert to the hostname ----------
+{
+  const state = engine({})
+  const writes = []
+  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share"}]}}, plugins: []},
+                 updateEntryInline: (id, settings) => { writes.push(JSON.parse(JSON.stringify(settings))); return true }}
+  state.submitCustomName("")
+  state.submitCustomName("   ")
+  assert.equal(writes.length, 0, "a blank submission must not persist and silently fall back to the hostname")
+  state.submitCustomName("My Box")
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].deviceName, "My Box")
+}
+
+// --- leaving the name pane must resume discovery -----------------------------
+// The rename bounce leaves the user in device_name, so the post-restart `ready`
+// skips discovery; without this the device list came back empty and switched off.
+{
+  const state = engine({receiverEnabled: true, backendReady: true, anyViewOpen: true, viewState: "device_name"})
+  state.closeDeviceName()
+  assert.equal(state.viewState, "nearby")
+  assert.ok(state.sent.some(c => c.command === "discovery_start"),
+    "closing the name pane resumes discovery")
+}
+{
+  const state = engine({receiverEnabled: true, backendReady: false, anyViewOpen: true, viewState: "device_name"})
+  state.closeDeviceName()
+  assert.equal(state.sent.filter(c => c.command === "discovery_start").length, 0,
+    "but not while the backend is not ready")
+}
+
+
+// --- the generated name has exactly one seed ---------------------------------
+// advertisedName seeded from the TLS fingerprint while Panel.qml previewed from
+// the hostname, so the pane showed one name and the machine advertised another.
+// The fingerprint also only arrives on the helper's ready event, so seeding from
+// it changed the name after launch and forced a bounce every session. These are
+// property bindings, which the sandbox cannot execute, so they are asserted on
+// source -- the same tool this file uses for the IPC target and the helper argv.
+assert.doesNotMatch(source, /advertisedName: Model\.resolveDeviceName\([^\n]*helperFingerprint/,
+  "the advertised name must not be seeded from a value that only exists after the helper starts")
+assert.match(source, /readonly property string generatedName: Model\.generatedDeviceName\(systemHostname/,
+  "there is one generated name, computed in the engine")
+assert.match(source, /advertisedName: Model\.resolveDeviceName\(configEntry, systemHostname, systemHostname/,
+  "and the advertised name is seeded from the same value the preview uses")
+
+
+// --- a rename must not destroy a live transfer -------------------------------
+// The bounce sends `shutdown`, which clears the queues. Anything in flight is
+// gone before the UI could notice, and the view is left showing a frozen
+// progress bar with no route out.
+for (const live of [{viewState: "receiving"}, {viewState: "sending"},
+                    {viewState: "incoming"}, {incomingQueue: [{id: "r"}]},
+                    {pendingOutgoing: {kind: "files"}}, {outgoingTransferId: "t1"},
+                    {activeIncomingSession: "s1"}]) {
+  const state = engine(Object.assign({receiverEnabled: true}, live))
+  state.restartForName()
+  assert.equal(state.sent.filter(c => c.command === "shutdown").length, 0,
+    "a rename must defer while " + JSON.stringify(live) + " rather than tearing the helper down")
+  assert.equal(state.restartingForName, false)
+  assert.equal(state.nameRestartDeferrals, 1, "and it re-arms instead")
+}
+
+// Idle, it goes ahead.
+{
+  const state = engine({receiverEnabled: true, viewState: "nearby"})
+  state.restartForName()
+  assert.ok(state.sent.some(c => c.command === "shutdown"))
+  assert.equal(state.restartingForName, true)
+  assert.equal(state.shutdownPending, true)
+}
+
+// The deferral budget is bounded, so a wedged transfer cannot postpone forever.
+{
+  const state = engine({receiverEnabled: true, viewState: "receiving"})
+  for (let i = 0; i < 31; i++) state.restartForName()
+  assert.equal(state.nameRestartDeferrals, 0, "the budget resets once exhausted")
+  assert.equal(state.sent.filter(c => c.command === "shutdown").length, 0,
+    "and the rename is abandoned, never forced through a live transfer")
+}
+
+// --- the rename fallback must not fire while the helper is still up ----------
+// receiverShutdownFallback's 250 ms is safe for toggleReceiver, where an early
+// fire still takes the helper down. On a rename receiverEnabled stays true, so
+// clearing the flags early hands the real exit to the unexpected-stop path.
+{
+  const state = engine({receiverEnabled: true, restartingForName: true, backend: {running: true, write: () => {}}})
+  state.finishNameShutdown()
+  assert.equal(state.restartingForName, true, "still up: re-arm rather than declare the bounce complete")
+}
+
+// --- no view is left orphaned by the bounce ----------------------------------
+{
+  const state = engine({receiverEnabled: true, restartingForName: true, shutdownPending: true, viewState: "sending"})
+  state.finishReceiverShutdown()
+  assert.equal(state.viewState, "nearby", "a transfer view cleared by the shutdown must not survive it")
+}
+{
+  const state = engine({receiverEnabled: true, restartingForName: true, shutdownPending: true, viewState: "device_name"})
+  state.finishReceiverShutdown()
+  assert.equal(state.viewState, "device_name", "but the pane the user is standing in does survive")
+}
+
+
+// --- the hostname is neutralised where it enters -----------------------------
+// It is concatenated into a kit Button label, and the kit renders labels with
+// Qt's default AutoText.
+assert.match(extractFunction("noteHostname"), /Model\.displayName\(/,
+  "the hostname must be sanitised at ingestion, because its render sink belongs to the UI kit")
+assert.match(source, /environment: \(\{ "HOSTNAME": root\.advertisedName \}\)/,
+  "the helper reads its alias from HOSTNAME at startup, so the chosen name must reach it through the environment")
+
+
+// --- nothing calls back into a destroyed engine ------------------------------
+// A shell.json write rebuilds the plugin tree, so these objects are destroyed
+// while their subprocesses and file loads are still in flight. The handlers are
+// the Process's own code and still run, but the engine they call into is
+// already gone: QObjectPrivate::deleteChildren deletes a child after the
+// parent's QML metaobject has been destroyed, and a function on the parent
+// reads undefined there. That is the logged failure --
+//   TypeError: Property 'noteDependencies' of object QuickShare_QMLTYPE_1072
+//   is not a function
+// -- at QuickShare.qml:172, from the dependency probe's onExited after a hot
+// reload, with no line number because it happened inside destruction.
+//
+// Every handler is run here against three shapes of gone engine. A handler that
+// reaches the engine any other way, or skips the check, throws.
+function handlerBodies(text) {
+  const out = []
+  const pattern = /\b(onExited|onRunningChanged|onRead|onLoaded|onLoadFailed|onStreamFinished|onStarted|onFileChanged):[ \t]*(function\s*\(([^)]*)\)\s*)?\{/g
+  let match
+  while ((match = pattern.exec(text)) !== null) {
+    const open = text.indexOf("{", match.index + match[0].length - 1)
+    let depth = 0
+    for (let index = open; index < text.length; index++) {
+      if (text[index] === "{") depth++
+      else if (text[index] === "}" && --depth === 0) {
+        out.push({name: match[1], args: match[3] || "", body: text.slice(open + 1, index)})
+        pattern.lastIndex = index
+        break
+      }
+    }
+  }
+  return out
+}
+
+// Any property read is a recorded function, so `typeof owner.x === "function"`
+// holds for a live engine whatever the handler asks for.
+function liveOwner(calls) {
+  return new Proxy({}, {get(_, name) {
+    if (name === "tearingDown") return false
+    return (...args) => { calls.push([String(name), args]) }
+  }})
+}
+
+for (const file of ["../Service.qml", "../QuickShare.qml"]) {
+  const text = fs.readFileSync(require.resolve(file), "utf8")
+  assert.match(text, /property bool tearingDown: false\s*\n\s*Component\.onDestruction: tearingDown = true/,
+    `${file} must mark itself as tearing down before its children are deleted`)
+
+  const handlers = handlerBodies(text)
+  assert.ok(handlers.length >= 6, `${file}: expected the process and file handlers, found ${handlers.length}`)
+  const reaching = handlers.filter(handler => /\bowner\./.test(handler.body))
+  assert.ok(reaching.length >= 3,
+    `${file}: handlers must reach the engine through the captured reference, found ${reaching.length}`)
+
+  for (const handler of handlers) {
+    // `root` is the id lookup that reads null mid-destruction. A handler that
+    // still calls through it is the bug, whatever the guard says.
+    assert.doesNotMatch(handler.body, /\broot\.[A-Za-z]+\(/,
+      `${file}: ${handler.name} calls into the engine through the root id lookup`)
+
+    const live = []
+    for (const [label, owner, expectCalls] of [
+      ["destroyed (functions gone)", {}, false],
+      ["null", null, false],
+      ["tearing down", {tearingDown: true, noteDependencies() { throw new Error("called while tearing down") }}, false],
+      ["live", liveOwner(live), true],
+    ]) {
+      const calls = []
+      const scope = {
+        owner,
+        Model,
+        console: {warn() {}, log() {}},
+        // Whatever the handler reads off its own Process, StdioCollector or
+        // FileView. These survive their parent; only the engine does not.
+        running: false,
+        text: () => "",
+        reload: () => { calls.push("reload") },
+        backend: {launched: false, running: false},
+        scanner: {launched: false},
+        sender: {launched: false},
+        helperUpdater: {launched: false},
+        depsOutput: {text: ""},
+        scanOutput: {text: ""},
+        shellConfigFile: {reload: () => { calls.push("reload") }},
+      }
+      assert.doesNotThrow(
+        () => vm.runInNewContext(`(function (${handler.args || "code"}) {${handler.body}})(0)`, scope),
+        `${file}: ${handler.name} throws when the engine is ${label}`)
+    }
+    if (/\bowner\.[A-Za-z]+\(/.test(handler.body))
+      assert.ok(live.length > 0, `${file}: ${handler.name} never reaches a live engine`)
+  }
 }
 
 console.log("service state tests passed")

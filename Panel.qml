@@ -71,7 +71,7 @@ Panel {
   readonly property string customDeviceName: engine ? engine.customDeviceName : ""
   readonly property string advertisedName: engine ? engine.advertisedName : ""
   readonly property string systemHostname: engine ? engine.systemHostname : ""
-  readonly property string generatedPreview: Model.generatedDeviceName(systemHostname || "nearby")
+  readonly property string generatedPreview: engine ? engine.generatedName : ""
 
   readonly property bool backendReady: engine ? engine.backendReady : false
   readonly property bool receiverEnabled: engine ? engine.receiverEnabled : false
@@ -170,6 +170,7 @@ Panel {
     function onPinFocusRequested() { if (root.opened) Qt.callLater(function(){ pinInput.forceActiveFocus() }) }
     function onIncomingPinCleared() { incomingPinInput.text = "" }
     function onIncomingPinFocusRequested() { if (root.opened) Qt.callLater(function(){ incomingPinInput.forceActiveFocus() }) }
+    function onCustomNameFocusRequested() { if (root.opened) Qt.callLater(function(){ nameInput.forceActiveFocus() }) }
     function onFocusRestoreRequested() { if (root.opened) Qt.callLater(function(){ keyCatcher.forceActiveFocus() }) }
   }
 
@@ -188,6 +189,7 @@ Panel {
   function closeDeviceName() { if (engine) engine.closeDeviceName() }
   function chooseNameMode(mode) { if (engine) engine.chooseNameMode(mode) }
   function submitCustomName() { if (engine) engine.submitCustomName(String(nameInput.text || "")) }
+  function focusCustomName() { if (engine) engine.requestCustomNameFocus() }
 
   function toggleReceiver() { if (engine) engine.toggleReceiver() }
   function startDiscovery() { if (engine) engine.startDiscovery() }
@@ -251,7 +253,7 @@ Panel {
   function moveCursor(dx, dy) {
     cursorActive = true
     if (viewState === "device_name" && !quickShareMode) {
-      if (dy !== 0) selectedIndex = Math.max(0, Math.min(3, selectedIndex + dy))
+      if (dy !== 0) selectedIndex = Math.max(0, Math.min(4, selectedIndex + dy))
       return
     }
     if (selectedIndex === -2 && dx !== 0) {
@@ -305,10 +307,10 @@ Panel {
       if (selectedIndex === 0) chooseNameMode("hostname")
       else if (selectedIndex === 1) chooseNameMode("generated")
       else if (selectedIndex === 2) chooseNameMode("custom")
+      else if (selectedIndex === 3) focusCustomName()
       else closeDeviceName()
       return
     }
-    if (selectedIndex === -3) { openDeviceName(); return }
     if (selectedIndex === -2) { setMode(quickShareMode ? "localsend" : "quickshare"); return }
     if (quickShareMode) {
       if (qsViewState === "target") {
@@ -323,10 +325,14 @@ Panel {
       else if (selectedIndex === qsDevices.length) qsScan()
       return
     }
+    // Below the Quick Share branch deliberately: the cog belongs to the
+    // LocalSend hero, and firing it from the other pane opened a view that
+    // pane cannot render and cannot leave.
+    if (selectedIndex === -3) { openDeviceName(); return }
     if (viewState === "nearby") {
       // Checked before the action row: with the helper unusable that row is
       // hidden, and the update button takes the index rescan would have had.
-      if (selectedIndex < 0) toggleReceiver()
+      if (selectedIndex === -1) toggleReceiver()
       else if (helperUpdateIndex >= 0 && selectedIndex === helperUpdateIndex) retryHelper()
       else if (helperCopyCommandIndex >= 0 && selectedIndex === helperCopyCommandIndex) copyUpdateCommand()
       else if (helperCopyLinkIndex >= 0 && selectedIndex === helperCopyLinkIndex) copyRepositoryLink()
@@ -431,7 +437,7 @@ Panel {
     contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(560))
     PanelKeyCatcher {
       id: keyCatcher; anchors.fill: parent
-      blocked: (root.viewState==="pin" && pinInput.activeFocus)||(root.viewState==="incoming_pin_edit"&&incomingPinInput.activeFocus)
+      blocked: (root.viewState==="pin" && pinInput.activeFocus)||(root.viewState==="incoming_pin_edit"&&incomingPinInput.activeFocus)||(root.viewState==="device_name"&&nameInput.activeFocus)
       onMoveRequested: function(dx,dy){root.moveCursor(dx,dy)}
       onActivateRequested: root.activateCursor()
       onCloseRequested: root.goBack()
@@ -444,7 +450,7 @@ Panel {
           detail: ""
           foreground: root.foreground; fontFamily: root.fontFamily
           iconComponent: Component { Text { text: root.viewState === "incoming" ? "󰁅" : "󰀂"; color: root.incoming ? root.urgent : root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.display } }
-          trailingControl: root.viewState === "nearby" ? nearbyHeroControls : null
+          trailingControl: !root.quickShareMode && root.viewState === "nearby" ? nearbyHeroControls : null
         }
         Component {
           id: nearbyHeroControls
@@ -701,6 +707,7 @@ Panel {
             id: nameInput
             visible: root.deviceNameMode === "custom"
             width:parent.width; placeholderText:"Name shown to other devices"; maximumLength:32
+            onVisibleChanged: if (visible && text === "") text = root.customDeviceName
             foreground:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.body
             onAccepted: root.submitCustomName()
             Keys.onPressed: function(event) { if(event.key===Qt.Key_Escape){root.closeDeviceName();event.accepted=true} }
@@ -713,8 +720,8 @@ Panel {
           Button {
             width:parent.width; leftAlign:true; bordered:false; iconText:"\u{f0141}"; text:"Back"
             foreground:root.dim; fontFamily:root.fontFamily
-            hasCursor:root.cursorActive&&root.selectedIndex===3
-            onHovered:function(v){root.noteHover(v,3)}; onClicked:root.closeDeviceName()
+            hasCursor:root.cursorActive&&root.selectedIndex===4
+            onHovered:function(v){root.noteHover(v,4)}; onClicked:root.closeDeviceName()
           }
         }
 

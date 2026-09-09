@@ -170,6 +170,8 @@ const functionNames = [
   "goBack", "goBackLocalSend", "selectFiles", "sendClipboard", "copyReceivedText",
   "moveCursor", "activateCursor",
   "retryHelper", "copyText", "copyUpdateCommand", "copyRepositoryLink", "noteHover",
+  // device name pane
+  "openDeviceName", "closeDeviceName", "chooseNameMode", "submitCustomName", "focusCustomName",
   // Quick Share pane
   "setMode", "qsScan", "qsChooseDevice", "qsBack", "qsCancel", "qsFinish",
   "qsSelectFiles", "installDependencies", "configureFirewall",
@@ -208,7 +210,13 @@ function stubEngine() {
   return {
     calls,
     mode: "localsend",
+    generatedName: "Amber Otter",
     setMode: record("setMode"),
+    openDeviceName: record("openDeviceName"),
+    closeDeviceName: record("closeDeviceName"),
+    chooseNameMode: record("chooseNameMode"),
+    submitCustomName: record("submitCustomName"),
+    requestCustomNameFocus: record("requestCustomNameFocus"),
     quickshare: stubQuickShare(calls, record),
     toggleReceiver: record("toggleReceiver"),
     startDiscovery: record("startDiscovery"),
@@ -627,6 +635,61 @@ function callNames(state) {
   state.syncOpenState()
   assert.ok(true, "view actions without an engine must not throw")
 }
+
+
+// --- the device-name pane ----------------------------------------------------
+// Rows are 0 Hostname, 1 Generated, 2 Custom, 3 the text field, 4 Back. The
+// field owned no row at first, so custom mode was unusable without a mouse.
+{
+  const state = panel({viewState: "device_name", selectedIndex: 0})
+  state.moveCursor(0, 9)
+  assert.equal(state.selectedIndex, 4, "the cursor reaches Back, the last row")
+  state.moveCursor(0, -9)
+  assert.equal(state.selectedIndex, 0, "and stops at the first mode row")
+}
+{
+  for (const [index, mode] of [[0, "hostname"], [1, "generated"], [2, "custom"]]) {
+    const state = panel({viewState: "device_name", selectedIndex: index})
+    state.activateCursor()
+    assert.deepEqual(state.engine.calls.at(-1), ["chooseNameMode", mode])
+  }
+}
+{
+  const state = panel({viewState: "device_name", selectedIndex: 3})
+  state.activateCursor()
+  assert.deepEqual(state.engine.calls.at(-1), ["requestCustomNameFocus"],
+    "row 3 focuses the field rather than acting, so custom mode works without a mouse")
+}
+{
+  const state = panel({viewState: "device_name", selectedIndex: 4})
+  state.activateCursor()
+  assert.deepEqual(state.engine.calls.at(-1), ["closeDeviceName"])
+}
+{
+  const state = panel({viewState: "device_name", selectedIndex: 2})
+  state.goBackLocalSend()
+  assert.deepEqual(state.engine.calls.at(-1), ["closeDeviceName"],
+    "the pane is escapable without closing the popup")
+}
+
+// The cog belongs to the LocalSend hero. Firing it from the Quick Share pane
+// opened a view that pane cannot render and cannot leave.
+{
+  const state = panel({quickShareMode: true, viewState: "nearby", selectedIndex: -3})
+  state.activateCursor()
+  assert.equal(state.engine.calls.some(c => c[0] === "openDeviceName"), false,
+    "the name cog must not fire from the Quick Share pane")
+}
+{
+  const state = panel({quickShareMode: false, viewState: "nearby", selectedIndex: -3})
+  state.activateCursor()
+  assert.deepEqual(state.engine.calls.at(-1), ["openDeviceName"],
+    "but it does from the LocalSend pane")
+}
+assert.match(source, /trailingControl: !root\.quickShareMode && root\.viewState === "nearby"/,
+  "the hero controls are gated on the pane, not on viewState alone")
+assert.match(source, /root\.viewState==="device_name"&&nameInput\.activeFocus/,
+  "the key catcher must yield while the name field has focus, per the UI kit contract")
 
 console.log("panel state tests passed")
 

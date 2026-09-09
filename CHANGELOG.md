@@ -53,6 +53,35 @@
 
 ## 1.1.1
 
+- Fix a receiver that reported itself disabled and never started on Omarchy
+  4.0.3, and settings that could not be saved. The plugin read its own entry
+  from `shell.shellConfig`, which the third-party plugin API does not have, so
+  every read resolved to nothing: receiving was reported off while `shell.json`
+  said it was on, the helper version was never probed, discovery never started,
+  and the pane choice and advertised name fell back to their defaults every
+  session. Settings are now read from `~/.config/omarchy/shell.json` itself and
+  written through the shell's sanctioned per-entry writer, so what the plugin
+  reads back is what it wrote.
+- Resolve the plugin's settings whether its widget sits directly on the bar or
+  is hosted inside another widget's drawer, and whether its entry is an object,
+  a bare id, or only a top-level `plugins[]` marker. A hosted widget with no
+  marker beside it has nowhere for the shell to write, and the plugin now says
+  so instead of offering a switch that springs back.
+- Stop writing settings through a path that could never work. The previous
+  string-entry promotion went through `shell.mutateShellConfig`, which the shell
+  only offers to a plugin that implements a whole bar, so it returned false on
+  every call. Nothing is lost: a bare id in the layout was never a target the
+  shell writes either, and its settings now live on the `plugins[]` marker
+  without the user's layout being rewritten to get there.
+- Report `configured`, `source` and `writable` from the `status` IPC verb, and
+  add a `configProbe` verb that reports what the shell actually handed the
+  plugin. A receiver that is off because it was turned off and one that is off
+  because its settings never resolved used to look identical from outside.
+- Stop a crash-adjacent `TypeError` during teardown. A shell reload destroys the
+  plugin while its `qs` subprocesses and file reads are still in flight, and
+  their handlers were calling back into an engine whose functions were already
+  gone. Every handler now reaches the engine through a reference captured when
+  it was built and checks it can still take the call.
 - Keep the hero status short and readable while showing the complete error
   detail separately below it, so failures remain understandable without
   cropping the panel's primary message.

@@ -1,0 +1,463 @@
+--- a/backend/src/main.rs
++++ b/backend/src/main.rs
+@@ -135,8 +135,34 @@
+     fingerprint: String,
+ }
+ 
++/// Diagnostics and protocol output must never be a crash site.
++///
++/// `println!` and `eprintln!` panic when the underlying write fails, and
++/// `[profile.release]` sets `panic = "abort"`, so with a consumer that has gone
++/// away -- a `| head -1`, a shell that exited, a Quickshell that was restarted
++/// -- every single log line aborts the process and dumps core instead of
++/// exiting. A `--version` piped into `head` is exactly that, and it left a
++/// SIGABRT core behind.
++///
++/// Restoring `SIGPIPE` to `SIG_DFL` was the alternative, and is rejected. Rust
++/// ignores `SIGPIPE` at startup so that a write to a closed socket surfaces as
++/// `io::ErrorKind::BrokenPipe` rather than killing the process; this helper
++/// serves HTTPS uploads to LocalSend peers that disconnect mid-transfer, so
++/// making every socket write a potential process kill would trade a rare crash
++/// for a common one. Dropping the error on the two diagnostic streams fixes the
++/// crash without changing how the network paths report failure.
++macro_rules! diag {
++    ($($arg:tt)*) => {{
++        use std::io::Write as _;
++        let _ = writeln!(std::io::stderr(), $($arg)*);
++    }};
++}
++
++/// The stdio protocol channel to the shell. A dead stdout means the shell that
++/// owns this helper is gone, so there is nothing left to report a failure to.
+ fn emit(value: Value) {
+-    println!("{}", value);
++    use std::io::Write as _;
++    let _ = writeln!(std::io::stdout(), "{}", value);
+ }
+ 
+ fn human_error(error: &anyhow::Error) -> &'static str {
+@@ -190,7 +216,7 @@
+             last_seen: Instant::now(),
+         },
+     );
+-    eprintln!("peer registered: {}", valid_remote_text(&device.alias, 128));
++    diag!("peer registered: {}", valid_remote_text(&device.alias, 128));
+     emit(json!({"event":"device","device":event_device(&device)}));
+ }
+ 
+@@ -344,16 +370,16 @@
+     let snapshot = expire_and_snapshot(&registry);
+     emit(json!({"event":"peer_snapshot","devices":snapshot}));
+     emit(json!({"event":"discovery_started"}));
+-    eprintln!("discovery started: +0 ms");
++    diag!("discovery started: +0 ms");
+     tokio::spawn(async move {
+         let run = async {
+             if let Err(error) = discovery.announce_presence_once().await {
+-                eprintln!(
++                diag!(
+                     "initial multicast failed: +{} ms: {error}",
+                     started.elapsed().as_millis()
+                 );
+             } else {
+-                eprintln!(
++                diag!(
+                     "initial multicast sent: +{} ms",
+                     started.elapsed().as_millis()
+                 );
+@@ -365,28 +391,28 @@
+             tokio::pin!(grace);
+             let retries_finished = tokio::select! {
+                 found = &mut grace => {
+-                    eprintln!("grace period finished: +{} ms", started.elapsed().as_millis());
++                    diag!("grace period finished: +{} ms", started.elapsed().as_millis());
+                     if found && !force_full {
+-                        eprintln!("HTTP fallback skipped: recent multicast peer available");
+-                        eprintln!("discovery finished: +{} ms", started.elapsed().as_millis());
++                        diag!("HTTP fallback skipped: recent multicast peer available");
++                        diag!("discovery finished: +{} ms", started.elapsed().as_millis());
+                         return;
+                     }
+                     false
+                 }
+                 result = &mut retries => {
+-                    if let Err(error) = result { eprintln!("multicast retries failed: {error}"); }
++                    if let Err(error) = result { diag!("multicast retries failed: {error}"); }
+                     let found = grace.await;
+-                    eprintln!("grace period finished: +{} ms", started.elapsed().as_millis());
++                    diag!("grace period finished: +{} ms", started.elapsed().as_millis());
+                     if found && !force_full {
+-                        eprintln!("HTTP fallback skipped: recent multicast peer available");
+-                        eprintln!("discovery finished: +{} ms", started.elapsed().as_millis());
++                        diag!("HTTP fallback skipped: recent multicast peer available");
++                        diag!("discovery finished: +{} ms", started.elapsed().as_millis());
+                         return;
+                     }
+                     true
+                 }
+             };
+ 
+-            eprintln!(
++            diag!(
+                 "HTTP fallback started: +{} ms",
+                 started.elapsed().as_millis()
+             );
+@@ -396,7 +422,7 @@
+                 let interfaces = MulticastDiscovery::local_ipv4_interfaces_with_netmasks()
+                     .context("could not enumerate interfaces")?;
+                 let (subnets, targets) = http_scan_targets(interfaces.clone());
+-                eprintln!("subnets selected: {subnets:?}");
++                diag!("subnets selected: {subnets:?}");
+ 
+                 let cached = if force_full {
+                     Vec::new()
+@@ -414,13 +440,13 @@
+                         )
+                     })
+                     .collect();
+-                eprintln!("cached candidates: {cached_labels:?}");
++                diag!("cached candidates: {cached_labels:?}");
+                 let attempted_cached: HashSet<String> = cached
+                     .iter()
+                     .filter_map(|device| device.ip.clone())
+                     .collect();
+                 for device in &cached {
+-                    eprintln!(
++                    diag!(
+                         "cached probe started: {}://{}:{} +{} ms",
+                         device.protocol,
+                         device.ip.as_deref().unwrap_or("unknown"),
+@@ -436,14 +462,14 @@
+                         |device| {
+                             let ip = device.ip.clone().unwrap_or_default();
+                             confirmed_cached.insert(ip.clone());
+-                            eprintln!(
++                            diag!(
+                                 "cached peer confirmed: {} alias={} +{} ms",
+                                 ip,
+                                 valid_remote_text(&device.alias, 128),
+                                 started.elapsed().as_millis()
+                             );
+                             record_peer(&registry, device);
+-                            eprintln!(
++                            diag!(
+                                 "peer emitted to frontend: +{} ms",
+                                 started.elapsed().as_millis()
+                             );
+@@ -454,7 +480,7 @@
+                     .iter()
+                     .filter(|device| !confirmed_cached.contains(device.ip.as_deref().unwrap_or("")))
+                 {
+-                    eprintln!(
++                    diag!(
+                         "cached probe failed: {}://{}:{} +{} ms",
+                         device.protocol,
+                         device.ip.as_deref().unwrap_or("unknown"),
+@@ -468,31 +494,31 @@
+                     &attempted_cached,
+                     !force_full && !confirmed_cached.is_empty(),
+                 ) else {
+-                    eprintln!("CACHE HIT: full subnet scan skipped");
+-                    eprintln!("HTTP scan finished: +{} ms", started.elapsed().as_millis());
++                    diag!("CACHE HIT: full subnet scan skipped");
++                    diag!("HTTP scan finished: +{} ms", started.elapsed().as_millis());
+                     return Ok::<(), anyhow::Error>(());
+                 };
+-                eprintln!("CACHE MISS: no cached peer confirmed");
+-                eprintln!(
++                diag!("CACHE MISS: no cached peer confirmed");
++                diag!(
+                     "full subnet scan started: +{} ms",
+                     started.elapsed().as_millis()
+                 );
+                 scanner
+                     .scan_ips_incremental(remaining_targets, |device| {
+-                        eprintln!(
++                        diag!(
+                             "HTTP peer found: {} alias={} +{} ms",
+                             device.ip.as_deref().unwrap_or("unknown"),
+                             valid_remote_text(&device.alias, 128),
+                             started.elapsed().as_millis(),
+                         );
+                         record_peer(&registry, device);
+-                        eprintln!(
++                        diag!(
+                             "peer emitted to frontend: +{} ms",
+                             started.elapsed().as_millis()
+                         );
+                     })
+                     .await?;
+-                eprintln!("HTTP scan finished: +{} ms", started.elapsed().as_millis());
++                diag!("HTTP scan finished: +{} ms", started.elapsed().as_millis());
+                 Ok::<(), anyhow::Error>(())
+             };
+             tokio::pin!(fallback);
+@@ -502,22 +528,22 @@
+                 tokio::select! {
+                     result = &mut fallback => result,
+                     result = &mut retries => {
+-                        if let Err(error) = result { eprintln!("multicast retries failed: {error}"); }
++                        if let Err(error) = result { diag!("multicast retries failed: {error}"); }
+                         fallback.await
+                     }
+                 }
+             };
+             if let Err(error) = fallback_result {
+-                eprintln!("HTTP fallback failed: {error:#}");
++                diag!("HTTP fallback failed: {error:#}");
+             }
+-            eprintln!("discovery finished: +{} ms", started.elapsed().as_millis());
++            diag!("discovery finished: +{} ms", started.elapsed().as_millis());
+         };
+         tokio::select! {
+             _ = run => {},
+-            _ = &mut stop_rx => { eprintln!("discovery cancelled: +{} ms", started.elapsed().as_millis()); emit(json!({"event":"discovery_stopped"})); return; }
++            _ = &mut stop_rx => { diag!("discovery cancelled: +{} ms", started.elapsed().as_millis()); emit(json!({"event":"discovery_stopped"})); return; }
+         }
+         let _ = stop_rx.await;
+-        eprintln!("discovery stopped: +{} ms", started.elapsed().as_millis());
++        diag!("discovery stopped: +{} ms", started.elapsed().as_millis());
+         emit(json!({"event":"discovery_stopped"}));
+     });
+     DiscoveryControl {
+@@ -789,8 +815,83 @@
+     }
+ }
+ 
++/// What this process was asked to do, decided from argv before anything else
++/// happens.
++///
++/// There was no argument parsing at all: `main` was the daemon, so
++/// `omarchy-nearby-helper --version` ignored the flag and started the full
++/// receiver -- selecting interfaces, binding port 53317 and announcing this
++/// machine on every interface it found, a tailnet interface included. Asking a
++/// binary what version it is must never put the machine on a network, so this
++/// runs before the Tokio runtime is built, before the TLS identity is loaded
++/// and before any socket exists.
++///
++/// Nothing in the plugin uses this path: `Service.qml` learns the helper
++/// version from the `helperVersion` field of the `ready` event
++/// (`Model.helperSatisfies` checks it against the manifest's floor), which is
++/// the better source because it reports the binary that is actually running.
++/// `--version` exists for a human at a terminal, and now answers without side
++/// effects.
++enum Invocation {
++    Run,
++    Version,
++    Help,
++    Unrecognised(String),
++}
++
++fn invocation<I: IntoIterator<Item = String>>(args: I) -> Invocation {
++    for arg in args {
++        return match arg.as_str() {
++            "--version" | "-V" => Invocation::Version,
++            "--help" | "-h" => Invocation::Help,
++            other => Invocation::Unrecognised(other.to_string()),
++        };
++    }
++    Invocation::Run
++}
++
++const USAGE: &str = "\
++omarchy-nearby-helper -- the LocalSend engine behind the Nearby Share plugin
++
++Usage:
++  omarchy-nearby-helper            run the receiver and speak JSON over stdio
++  omarchy-nearby-helper --version  print the version and exit
++  omarchy-nearby-helper --help     print this message and exit
++
++With no arguments this is a daemon, not a command: it binds the LocalSend port,
++announces this machine on every multicast-capable interface, and exchanges
++newline-delimited JSON with its parent over stdin and stdout. It is normally
++started by the Quickshell plugin rather than by hand.
++
++Environment:
++  HOSTNAME  the alias advertised to other devices, read once at startup
++  HOME      required; the TLS identity and receiver settings live under it";
++
++fn main() -> Result<()> {
++    match invocation(std::env::args().skip(1)) {
++        Invocation::Run => run(),
++        Invocation::Version => {
++            // Not println!: the caller may well be a `| head -1`, which is the
++            // pipe that used to abort this process. See the diag! macro.
++            use std::io::Write as _;
++            let _ = writeln!(std::io::stdout(), "{}", env!("CARGO_PKG_VERSION"));
++            Ok(())
++        }
++        Invocation::Help => {
++            use std::io::Write as _;
++            let _ = writeln!(std::io::stdout(), "{USAGE}");
++            Ok(())
++        }
++        Invocation::Unrecognised(argument) => {
++            diag!("omarchy-nearby-helper: unrecognised argument `{argument}`");
++            diag!("{USAGE}");
++            std::process::exit(2)
++        }
++    }
++}
++
+ #[tokio::main]
+-async fn main() -> Result<()> {
++async fn run() -> Result<()> {
+     let home = PathBuf::from(std::env::var("HOME").context("HOME is not set")?);
+     let state_dir = settings::state_dir(&home);
+     let settings_path = state_dir.join("settings.json");
+@@ -815,9 +916,9 @@
+         .await
+         .context("download destination unavailable")?;
+     match cleanup_stale_partial_files(&canonical_download, STALE_PARTIAL_AGE).await {
+-        Ok(removed) if removed > 0 => eprintln!("removed {removed} stale Nearby partial files"),
++        Ok(removed) if removed > 0 => diag!("removed {removed} stale Nearby partial files"),
+         Ok(_) => {}
+-        Err(error) => eprintln!("could not clean stale Nearby partial files: {error}"),
++        Err(error) => diag!("could not clean stale Nearby partial files: {error}"),
+     }
+     let alias = std::env::var("HOSTNAME")
+         .ok()
+@@ -843,7 +944,7 @@
+             if let Some(event) = startup_failure_event(&error) {
+                 emit(event);
+                 if let Err(flush_error) = std::io::stdout().flush() {
+-                    eprintln!("could not flush startup failure event: {flush_error}");
++                    diag!("could not flush startup failure event: {flush_error}");
+                 }
+                 return Err(error.context(format!(
+                     "receiver could not start: port {NEARBY_PORT} is already in use by another LocalSend receiver"
+@@ -947,7 +1048,7 @@
+             _ = expiry.tick() => { let snapshot=expire_and_snapshot(&registry); if discovery.is_some(){emit(json!({"event":"peer_snapshot","devices":snapshot}));} }
+             Some(device) = peer_rx.recv() => {
+                 if let Some(control) = discovery.as_ref() {
+-                    eprintln!(
++                    diag!(
+                         "peer discovered via multicast: +{} ms ({})",
+                         control.started.elapsed().as_millis(),
+                         device.ip.as_deref().unwrap_or("unknown")
+--- a/backend/vendor/localsend-rs/src/discovery/multicast.rs
++++ b/backend/vendor/localsend-rs/src/discovery/multicast.rs
+@@ -22,6 +22,27 @@
+ 
+ pub type Result<T> = std::result::Result<T, LocalSendError>;
+ 
++/// LOCAL PATCH (omarchy-nearby-share). Recorded in VENDORED_LOCALSEND_RS.md.
++///
++/// `eprintln!` panics when the write to stderr fails, and the binary that
++/// vendors this crate builds with `panic = "abort"`, so with a stderr consumer
++/// that has gone away every line printed from the startup and announce paths
++/// aborts the process and dumps core. Upstream's own CLI keeps stderr for the
++/// life of the process, so it never sees this; a daemon whose parent can be
++/// restarted underneath it does.
++///
++/// Same shape as the `diag!` macro in the binary's src/main.rs, and the same
++/// reasoning for not restoring SIGPIPE to SIG_DFL instead: this crate writes to
++/// sockets whose peers disconnect, and Rust relies on SIGPIPE being ignored for
++/// those writes to surface as `BrokenPipe` errors rather than killing the
++/// process.
++macro_rules! diag {
++    ($($arg:tt)*) => {{
++        use std::io::Write as _;
++        let _ = writeln!(std::io::stderr(), $($arg)*);
++    }};
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct MulticastConfig {
+     pub address: Ipv4Addr,
+@@ -107,10 +128,10 @@
+             match socket.send_to(&payload, &multicast_addr).await {
+                 Ok(_) => {
+                     any_sent = true;
+-                    eprintln!("announce: {name} ({interface}) -> sent");
++                    diag!("announce: {name} ({interface}) -> sent");
+                 }
+                 Err(error) => {
+-                    eprintln!("announce: {name} ({interface}) -> failed: {error}");
++                    diag!("announce: {name} ({interface}) -> failed: {error}");
+                     last_error = Some(error);
+                 }
+             }
+@@ -212,17 +233,17 @@
+ 
+         let bind_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, self.config.port));
+         let interfaces = Self::multicast_interface_entries(self.config.interface_names.as_ref())?;
+-        eprintln!("interfaces selected:");
++        diag!("interfaces selected:");
+         let mut sockets = Vec::new();
+         let mut socket_interfaces = Vec::new();
+         for (name, interface) in interfaces {
+-            eprintln!("  {name} ({interface})");
++            diag!("  {name} ({interface})");
+             match create_reusable_udp_socket(&bind_addr, interface, self.config.address) {
+                 Ok(socket) => {
+                     sockets.push(Arc::new(socket));
+                     socket_interfaces.push((name, interface));
+                 }
+-                Err(error) => eprintln!("  {name} ({interface}) -> socket failed: {error}"),
++                Err(error) => diag!("  {name} ({interface}) -> socket failed: {error}"),
+             }
+         }
+         if sockets.is_empty() {
+@@ -278,7 +299,7 @@
+                                         ip: Some(src.ip().to_string()),
+                                     };
+ 
+-                                    eprintln!("register/announcement received from {}", src.ip());
++                                    diag!("register/announcement received from {}", src.ip());
+ 
+                                     let is_announcement = announcement.announce
+                                         || announcement.announcement.unwrap_or(false);
+@@ -326,7 +347,7 @@
+     async fn announce_presence(&self) -> std::result::Result<(), LocalSendError> {
+         self.announce_presence_once().await?;
+         if let Err(error) = self.retry_announcements().await {
+-            eprintln!("announcement retries failed after initial success: {error}");
++            diag!("announcement retries failed after initial success: {error}");
+         }
+         Ok(())
+     }
+--- a/VENDORED_LOCALSEND_RS.md
++++ b/VENDORED_LOCALSEND_RS.md
+@@ -198,6 +198,41 @@
+ `reqwest::Url` and appends `pin` through its query serializer. Tests cover
+ spaces, Unicode, `+`, `&`, `#` and `%` round-tripping unchanged.
+ 
++### 7. Diagnostics on the discovery path must not abort the process
++
++- Nearby commit: _pending — see the staged patch, this is not built yet_
++- Primary file: `src/discovery/multicast.rs`
++- Upstream lines this applies to: the six `eprintln!` calls at upstream
++  `src/discovery/multicast.rs` 110, 113, 215, 219, 225, 281 and 329
++  (`announce:`, `interfaces selected:`, the per-interface lines, the socket
++  failure line, `register/announcement received from`, and
++  `announcement retries failed after initial success`)
++- Regression test: none in the vendor; the mechanism is covered outside it,
++  because it is a property of the print macro rather than of this crate's logic
++
++`eprintln!` panics when the write to stderr fails, and the binary that vendors
++this crate builds with `panic = "abort"` (`backend/Cargo.toml`), so a stderr
++consumer that has gone away turns every line printed from the startup and
++announce paths into an `abort()` and a core dump. Upstream never sees this: its
++own CLI owns stderr for the life of the process. A daemon started by a
++Quickshell that can be restarted underneath it does, and so does any invocation
++piped into a command that exits early.
++
++Each of the six calls now goes through a local `diag!` macro that writes with
++`writeln!(std::io::stderr(), ...)` and drops the error. The macro is defined in
++the same module, immediately after the `Result` alias, so the patch is confined
++to one file and one construct.
++
++Restoring `SIGPIPE` to `SIG_DFL` in the binary would have covered this crate
++without touching it, and was rejected: Rust ignores `SIGPIPE` at startup so that
++a write to a closed socket surfaces as `io::ErrorKind::BrokenPipe` instead of
++killing the process, and this crate writes to sockets whose peers disconnect
++mid-transfer. That trade swaps a rare crash for a common one.
++
++This entry is the only local change to the vendor that is not a protocol or
++security fix. It is a candidate to send upstream as-is: nothing about it is
++specific to Nearby.
++
+ ## Nearby behavior outside the vendor
+ 
+ The LocalSend 1.18 client-certificate compatibility hotfix is not one of the

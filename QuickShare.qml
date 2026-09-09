@@ -164,16 +164,39 @@ Item {
   }
   function failWith(message) { viewState = "error"; errorText = message; statusText = message }
 
+  // Set before anything else is torn down. A shell.json write rebuilds the
+  // plugin tree, so this engine is destroyed and rebuilt routinely, not only at
+  // shutdown, and every `qs` subprocess below outlives it: `dependencies.sh`
+  // takes a moment, a scan takes six seconds, a send takes as long as the phone
+  // does. Their handlers are the Process's own code and still run, but the
+  // engine they call into is already gone -- QObjectPrivate::deleteChildren
+  // runs after the parent's QML metaobject is destroyed, so a function on it
+  // reads undefined and calling it throws inside the destruction path. That is
+  // the logged TypeError: "Property 'noteDependencies' of object
+  // QuickShare_QMLTYPE_1072 is not a function" at line -1, from depsProbe's
+  // onExited after a hot reload.
+  //
+  // The fix is the one that stopped t1nk33r.nook crashing on rebuild: reach the
+  // engine through `owner`, captured at construction, never through the `root`
+  // id lookup, and check it is still callable before every call.
+  property bool tearingDown: false
+  Component.onDestruction: tearingDown = true
+
   Process {
     id: depsProbe
+    readonly property var owner: root
     command: ["bash", root.pluginDir + "/scripts/dependencies.sh", "--json"]
     running: false
     stdout: StdioCollector { id: depsOutput; waitForEnd: true }
-    onExited: function(code) { root.noteDependencies(String(depsOutput.text || "")) }
+    onExited: function(code) {
+      if (!owner || owner.tearingDown || typeof owner.noteDependencies !== "function") return
+      owner.noteDependencies(String(depsOutput.text || ""))
+    }
   }
 
   Process {
     id: scanner
+    readonly property var owner: root
     property bool launched: false
     command: {
       var argv = [root.binary, "--port", String(root.port)]
@@ -189,24 +212,33 @@ Item {
     // emitting started or exited, so a missing binary has to be caught here.
     onRunningChanged: {
       if (running || scanner.launched) return
-      root.scanning = false
-      root.available = false
-      root.errorText = "The Quick Share CLI is not installed."
+      if (!owner || owner.tearingDown || typeof owner.noteScannerNeverLaunched !== "function") return
+      owner.noteScannerNeverLaunched()
     }
     onExited: function(code) {
-      root.scanning = false
-      if (code === 0) {
-        root.noteDevices(String(scanOutput.text || ""))
-        root.statusText = root.devices.length ? "Ready" : "No devices nearby"
-      } else {
-        root.errorText = "Quick Share could not search for devices."
-        root.statusText = root.errorText
-      }
+      if (!owner || owner.tearingDown || typeof owner.noteScanFinished !== "function") return
+      owner.noteScanFinished(code, String(scanOutput.text || ""))
     }
+  }
+  function noteScannerNeverLaunched() {
+    scanning = false
+    available = false
+    errorText = "The Quick Share CLI is not installed."
+  }
+  function noteScanFinished(code, payload) {
+    scanning = false
+    if (code === 0) {
+      noteDevices(payload)
+      statusText = devices.length ? "Ready" : "No devices nearby"
+      return
+    }
+    errorText = "Quick Share could not search for devices."
+    statusText = errorText
   }
 
   Process {
     id: sender
+    readonly property var owner: root
     property bool launched: false
     // --to is mandatory off a TTY, and `qs` exits 2 rather than prompting if
     // it is missing. The device id is passed rather than the name: a name
@@ -221,14 +253,27 @@ Item {
       return argv
     }
     running: false
-    stderr: SplitParser { onRead: function(line) { root.noteSendLine(line) } }
+    stderr: SplitParser {
+      readonly property var owner: root
+      onRead: function(line) {
+        if (!owner || owner.tearingDown || typeof owner.noteSendLine !== "function") return
+        owner.noteSendLine(line)
+      }
+    }
     onStarted: sender.launched = true
     onRunningChanged: {
       if (running || sender.launched) return
-      root.pendingPaths = []
-      root.failWith("The Quick Share CLI is not installed.")
+      if (!owner || owner.tearingDown || typeof owner.noteSenderNeverLaunched !== "function") return
+      owner.noteSenderNeverLaunched()
     }
-    onExited: function(code) { root.finishSend(code) }
+    onExited: function(code) {
+      if (!owner || owner.tearingDown || typeof owner.finishSend !== "function") return
+      owner.finishSend(code)
+    }
+  }
+  function noteSenderNeverLaunched() {
+    pendingPaths = []
+    failWith("The Quick Share CLI is not installed.")
   }
 
   Component.onCompleted: refreshDependencies()

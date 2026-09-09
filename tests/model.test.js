@@ -106,16 +106,6 @@ assert.equal(Model.manifestVersion('{"id":"other.plugin","version":"1.0.2"}', "o
 assert.equal(Model.manifestVersion('{"id":"oma.nearby"}', "oma.nearby"), "")
 assert.equal(Model.manifestVersion("not json", "oma.nearby"), "")
 
-// The compatibility config parser backs the modern-host file fallback: an
-// object is the config, anything else is a config that has not arrived.
-assert.deepEqual(Model.parseShellConfig('{"bar":{"layout":{}}}'), {bar:{layout:{}}})
-assert.deepEqual(Model.parseShellConfig("{}"), {})
-assert.equal(Model.parseShellConfig("not json"), null)
-assert.equal(Model.parseShellConfig(""), null)
-assert.equal(Model.parseShellConfig("null"), null)
-assert.equal(Model.parseShellConfig('["oma.nearby"]'), null,
-  "a JSON array is not a shell config and must stay null")
-
 // SemVer precedence, including the rule the release process depends on: a
 // prerelease sorts below the release it leads up to, so a checkout on 1.1.0-dev
 // is not satisfied by the 1.1.0 floor it is heading for and 1.1.0 is not held
@@ -150,41 +140,114 @@ assert.equal(Model.manifestMinHelperVersion("not json", "oma.nearby"), "")
 // config that has not been applied yet, which is why it is null rather than an
 // empty settings object: the receiver stays off until the entry is seen, so a
 // persisted off is never briefly treated as on.
+//
+// `source` is where a settings write would land, and it mirrors the order
+// shell.qml:1078 updateEntryInline() searches, so the value read back is the
+// value written.
 const layoutOff = {version:1, bar:{layout:{left:[{id:"omarchy.menu"}], center:[], right:[{id:"b.omadoro"},{id:"oma.nearby",receiverEnabled:false}]}}, plugins:[]}
-assert.deepEqual(Model.barEntry(layoutOff, "oma.nearby"), {id:"oma.nearby", settings:{receiverEnabled:false}})
+assert.deepEqual(Model.barEntry(layoutOff, "oma.nearby"),
+  {id:"oma.nearby", settings:{receiverEnabled:false}, source:"layout", targetSettings:{receiverEnabled:false}})
 assert.equal(Model.receiverEnabledIn(Model.barEntry(layoutOff, "oma.nearby")), false)
+assert.equal(Model.entryWritable(Model.barEntry(layoutOff, "oma.nearby")), true)
 
 const layoutDefault = {version:1, bar:{layout:{right:[{id:"oma.nearby"}]}}, plugins:[]}
-assert.deepEqual(Model.barEntry(layoutDefault, "oma.nearby"), {id:"oma.nearby", settings:{}})
+assert.deepEqual(Model.barEntry(layoutDefault, "oma.nearby"),
+  {id:"oma.nearby", settings:{}, source:"layout", targetSettings:{}})
 assert.equal(Model.receiverEnabledIn(Model.barEntry(layoutDefault, "oma.nearby")), true,
   "an entry with no receiver setting means on, the way it always has")
 
-// Quattro accepts a widget id directly in a bar layout and normalizes it to an
-// object entry. Reading shell.json directly must preserve those same semantics.
+// --- the collapsed-config regression --------------------------------------
+// On 4.0.3 this plugin read its settings from `shell.shellConfig`, which
+// services/PluginShellApi.qml does not have: an installed third-party plugin
+// gets `barConfig`, a copy of shellConfig.bar. Every read collapsed to null, so
+// the receiver reported itself disabled while shell.json said it was on, and
+// nothing it wrote could be read back. Both shapes must resolve, and both
+// placements: on the bar, and hosted inside a drawer's items[].
+{
+  // What shell.barConfig actually is: shellConfig.bar, with no `bar` of its own
+  // and no plugins[]. Verified live on 4.0.3 --
+  // `omarchy-shell shell listShellConfig | jq '.bar | keys'` is
+  // ["centerAnchor", "layout", "position", "transparent"].
+  const barConfig = {position:"top", transparent:false, centerAnchor:"omarchy.clock",
+    layout:{left:[], center:[{id:"oma.nearby", receiverEnabled:true}], right:[]}}
+  const entry = Model.barEntry(barConfig, "oma.nearby")
+  assert.notEqual(entry, null, "a bar-config shape must resolve, not collapse to null")
+  assert.equal(Model.receiverEnabledIn(entry), true)
+  assert.equal(entry.source, "layout")
+
+  // Hosted inside a drawer. shell.qml's writer never looks inside items[], so
+  // it writes the plugins[] marker, and the marker is what has to win.
+  const hosted = {version:1, bar:{layout:{right:[
+    {id:"t1nk33r.nook", items:[{id:"oma.nearby", mode:"quickshare"}]}]}},
+    plugins:[{id:"t1nk33r.nook"}, {id:"oma.nearby", receiverEnabled:false}]}
+  const hostedEntry = Model.barEntry(hosted, "oma.nearby")
+  assert.notEqual(hostedEntry, null, "a widget a drawer hosts must resolve too")
+  assert.deepEqual(hostedEntry.settings, {mode:"quickshare", receiverEnabled:false},
+    "the drawer's items entry supplies the settings the marker does not carry")
+  assert.equal(Model.modeIn(hostedEntry), "quickshare")
+  assert.equal(Model.receiverEnabledIn(hostedEntry), false,
+    "and the marker, which is where a write lands, wins where they disagree")
+  assert.equal(hostedEntry.source, "plugins")
+  assert.deepEqual(hostedEntry.targetSettings, {receiverEnabled:false},
+    "a write resends the marker's own keys, never the drawer's")
+  assert.equal(Model.entryWritable(hostedEntry), true)
+
+  // Hosted with no marker: the host writes nothing, and the plugin has to know
+  // that rather than offer a control that springs back.
+  const stranded = Model.barEntry({version:1, bar:{layout:{right:[
+    {id:"t1nk33r.nook", items:[{id:"oma.nearby", receiverEnabled:false}]}]}}, plugins:[]}, "oma.nearby")
+  assert.equal(stranded.source, "items")
+  assert.equal(Model.entryWritable(stranded), false)
+  assert.equal(Model.receiverEnabledIn(stranded), false)
+
+  // Not configured must stay distinguishable from configured off. Both report
+  // the receiver as not eligible; only the pair tells them apart.
+  const absent = Model.barEntry({version:1, bar:{layout:{right:[]}}, plugins:[]}, "oma.nearby")
+  const off = Model.barEntry({version:1, bar:{layout:{right:[{id:"oma.nearby", receiverEnabled:false}]}}, plugins:[]}, "oma.nearby")
+  assert.equal(absent, null)
+  assert.notEqual(off, null)
+  assert.equal(Model.receiverEnabledIn(absent), false)
+  assert.equal(Model.receiverEnabledIn(off), false)
+  assert.notDeepEqual([absent !== null, Model.receiverEnabledIn(absent)],
+    [off !== null, Model.receiverEnabledIn(off)],
+    "an unread config and a persisted off must not present as the same state")
+}
+
+// Quattro accepts a widget id directly in a bar layout. It counts as
+// configured, but it is not a write target: shell.qml's writer matches entries
+// through entry.id, which a string does not have, so settings land on the
+// plugins[] marker instead and are read back from there.
 const layoutString = {version:1, bar:{layout:{right:["oma.nearby"]}}, plugins:[]}
-assert.deepEqual(Model.barEntry(layoutString, "oma.nearby"), {id:"oma.nearby", settings:{}},
+assert.deepEqual(Model.barEntry(layoutString, "oma.nearby"),
+  {id:"oma.nearby", settings:{}, source:"items", targetSettings:{}},
   "a matching string-form bar entry must be recognized as configured")
 assert.equal(Model.receiverEnabledIn(Model.barEntry(layoutString, "oma.nearby")), true,
   "a string-form entry with no receiver setting must use the default-on behavior")
 for (const region of ["left", "center", "right"]) {
   const config = {version:1, bar:{layout:{left:[], center:[], right:[]}}, plugins:[]}
   config.bar.layout[region] = ["oma.nearby"]
-  assert.deepEqual(Model.barEntry(config, "oma.nearby"), {id:"oma.nearby", settings:{}},
+  assert.notEqual(Model.barEntry(config, "oma.nearby"), null,
     `a string-form entry in bar.layout.${region} must be recognized`)
 }
-const promotedLayout = {
-  version:1,
-  bar:{layout:{left:[], center:[], right:["other.before", "oma.nearby", {id:"other.after", x:1}]}},
-  plugins:[],
+{
+  const stringWithMarker = {version:1, bar:{layout:{right:["other.before", "oma.nearby", {id:"other.after", x:1}]}},
+    plugins:[{id:"oma.nearby", receiverEnabled:false}]}
+  const entry = Model.barEntry(stringWithMarker, "oma.nearby")
+  assert.equal(entry.source, "plugins",
+    "a string entry cannot receive settings, so the marker beside it is the write target")
+  assert.equal(Model.receiverEnabledIn(entry), false)
+  assert.deepEqual(stringWithMarker.bar.layout.right, ["other.before", "oma.nearby", {id:"other.after", x:1}],
+    "and reading must not rewrite the user's layout to get there")
 }
-assert.equal(Model.hasStringBarEntry(promotedLayout, "oma.nearby"), true)
-assert.equal(Model.promoteStringBarEntry(promotedLayout, "oma.nearby", {receiverEnabled:false}), true)
-assert.deepEqual(promotedLayout.bar.layout.right,
-  ["other.before", {id:"oma.nearby", receiverEnabled:false}, {id:"other.after", x:1}],
-  "promoting a string entry must preserve its region, slot, and neighboring entries")
-assert.equal(Model.hasStringBarEntry(promotedLayout, "oma.nearby"), false)
-assert.equal(Model.promoteStringBarEntry(promotedLayout, "oma.nearby", {receiverEnabled:true}), false,
-  "promotion must not append or duplicate an entry that is already object-form")
+
+// Duplicate placements: the host overwrites every top-level match with the same
+// value, so the first one is the truth and a stale twin cannot swallow a write.
+{
+  const duplicated = {version:1, bar:{layout:{
+    left:[{id:"oma.nearby", receiverEnabled:true}],
+    right:[{id:"oma.nearby", receiverEnabled:false}]}}, plugins:[]}
+  assert.equal(Model.receiverEnabledIn(Model.barEntry(duplicated, "oma.nearby")), true)
+}
 
 assert.equal(Model.barEntry(layoutDefault, "other.plugin"), null)
 assert.equal(Model.barEntry({version:1, bar:{layout:{right:[]}}, plugins:[]}, "oma.nearby"), null)
@@ -192,16 +255,30 @@ assert.equal(Model.barEntry(null, "oma.nearby"), null)
 assert.equal(Model.barEntry(undefined, "oma.nearby"), null)
 assert.equal(Model.barEntry({}, "oma.nearby"), null)
 assert.equal(Model.barEntry(layoutDefault, ""), null)
+assert.equal(Model.entryWritable(null), false)
 assert.equal(Model.receiverEnabledIn(null), false,
   "no entry means the receiver is not eligible to run yet, not that it defaults to on")
+assert.equal(Model.receiverEnabledIn({id:"oma.nearby"}), false,
+  "and an entry with no settings at all must not throw its way to eligible")
 
 // Non-widget plugin entries live in plugins[] instead of the bar layout.
 assert.deepEqual(Model.barEntry({version:1, plugins:[{id:"oma.nearby",receiverEnabled:false}]}, "oma.nearby"),
-  {id:"oma.nearby", settings:{receiverEnabled:false}})
+  {id:"oma.nearby", settings:{receiverEnabled:false}, source:"plugins", targetSettings:{receiverEnabled:false}})
 // Malformed entries must not throw or match. String entries are valid only in
 // the bar layout; Quattro's top-level plugins[] lookup requires object entries.
 assert.equal(Model.barEntry({version:1, bar:{layout:{right:[null,"other.plugin",42]}}}, "oma.nearby"), null)
 assert.equal(Model.barEntry({version:1, plugins:["oma.nearby"]}, "oma.nearby"), null)
+
+// The settings document is parsed here so the QML has no JSON handling of its
+// own. Unreadable is null, which the service holds as not-yet-known rather than
+// as an empty config: an unreadable shell.json must not start a receiver the
+// user turned off.
+assert.deepEqual(Model.shellConfigIn('{"version":1,"plugins":[]}'), {version:1, plugins:[]})
+assert.equal(Model.shellConfigIn("not json"), null)
+assert.equal(Model.shellConfigIn(""), null)
+assert.equal(Model.shellConfigIn("   "), null)
+assert.equal(Model.shellConfigIn(null), null)
+assert.equal(Model.shellConfigIn("[1,2]"), null, "a document that is not an object is not a config")
 
 
 // --- device name -----------------------------------------------------------
@@ -250,5 +327,33 @@ assert.equal(Model.resolveDeviceName({settings:{deviceNameMode:"custom",deviceNa
   "a user-typed name is sanitised like a remote one")
 assert.equal(Model.resolveDeviceName({settings:{deviceNameMode:"custom",deviceName:"y".repeat(80)}}, "luna", "fp").length, 32,
   "a custom name is capped at the advertised limit")
+
+
+// A leading hyphen makes the name parse as a flag where it reaches the Quick
+// Share CLI as `--name <value>`; verified against the binary, "-Luna" produced
+// "unexpected argument '-L' found" and killed every invocation. Interior
+// hyphens are legitimate and must survive.
+assert.equal(Model.displayName("-Luna"), "Luna")
+assert.equal(Model.displayName("--x"), "x")
+assert.equal(Model.displayName("+Plus"), "Plus")
+assert.equal(Model.displayName("a-b"), "a-b", "an interior hyphen is not a flag")
+assert.equal(Model.displayName("-"), "")
+
+// The pane's Generated button and the engine's advertised name must be the same
+// string. They were seeded differently -- fingerprint vs hostname -- so the
+// panel showed one name and the machine advertised another.
+assert.equal(Model.resolveDeviceName({settings:{deviceNameMode:"generated"}}, "luna", "luna"),
+  Model.generatedDeviceName("luna"),
+  "generated mode must advertise exactly what the pane previews")
+
+
+// The hostname reaches a kit Button label, and the kit renders labels with Qt's
+// default AutoText -- so it is neutralised where it enters, not where it is
+// drawn. Applying it twice (ingestion, then resolveDeviceName) must be safe.
+assert.equal(Model.displayName("<b>host</b>", 64), "bhost/b")
+assert.equal(Model.displayName(Model.displayName("<b>host</b>", 64), 64), "bhost/b",
+  "sanitising is idempotent, so the ingestion pass and resolveDeviceName cannot compound")
+assert.equal(Model.displayName(Model.displayName("Phone \u2764", 64), 64), "Phone \u2764",
+  "and it still leaves emoji alone on the second pass")
 
 console.log("Model tests passed")

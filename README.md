@@ -106,13 +106,40 @@ through the firewall and needs no rule.
 omarchy-shell t1nk33r.nearby-share mode              # localsend | quickshare
 omarchy-shell t1nk33r.nearby-share quickshare        # switch pane
 omarchy-shell t1nk33r.nearby-share localsend
+omarchy-shell t1nk33r.nearby-share receiverOn        # also receiverOff, receiverToggle
 omarchy-shell t1nk33r.nearby-share quickshareStatus  # deps + device count
 omarchy-shell t1nk33r.nearby-share status            # LocalSend engine
+omarchy-shell t1nk33r.nearby-share configProbe       # where the settings came from
 ```
+
+`status` reports `configured` beside `enabled`: a receiver that is off because
+it was turned off and one that is off because its settings never resolved are
+two different faults, and they used to look identical from here. `source` is
+which `shell.json` entry the settings were read from and where a change is
+written back — `layout`, `plugins`, or `items` for a widget a drawer hosts with
+no `plugins[]` marker, which the shell will not write. `configProbe` reports
+what the shell actually handed the plugin, for when settings do not stick.
 
 Changing an `IpcHandler`'s methods needs `omarchy restart shell`; the method
 table binds at registration and a hot-reload does not rebuild it. QML and
 `shell.json` changes hot-reload normally.
+
+## Settings
+
+Every setting lives in the plugin's own `~/.config/omarchy/shell.json` entry —
+`receiverEnabled`, `mode`, `deviceNameMode` and `deviceName`, as declared in
+`manifest.json`. There is no second copy: the persisted value *is* the effective
+value, so nothing can drift and the panel's switches survive a shell restart.
+
+The engine reads that file directly and writes through the shell's per-entry
+writer, `shell.updateEntryInline`. It does not read `shell.shellConfig`, which
+the third-party plugin API (`services/PluginShellApi.qml`) does not have, and it
+does not call `shell.mutateShellConfig`, which the shell only offers to a plugin
+that implements a whole bar. Reads and writes resolve the same entry in the same
+order the shell searches — a top-level `bar.layout` object entry, else the
+top-level `plugins[]` marker, else the `items[]` list of a drawer hosting the
+widget — so a saved setting is the one that is read back, wherever the widget is
+placed. `tests/qml.test.sh` fails if either unavailable API comes back.
 
 ## Upstream documentation
 
@@ -361,12 +388,10 @@ floor and committed helper metadata identify which helper the plugin requires.
 
 ## Tests
 
-Frontend model tests:
+Frontend tests, QML lint and the host's manifest check:
 
 ```sh
-node tests/model.test.js
-node tests/panel-state.test.js
-node tests/service-state.test.js
+bash tests/all.sh
 ```
 
 Backend tests:

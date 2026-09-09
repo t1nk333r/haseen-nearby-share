@@ -1,24 +1,13 @@
-# Nearby robustness validation
-
-## Automated coverage
-
-Run:
-
-```sh
-cargo test --manifest-path backend/Cargo.toml
-cargo test --manifest-path backend/vendor/localsend-rs/Cargo.toml --features https
-node tests/model.test.js
-node tests/panel-state.test.js
-node tests/service-state.test.js
-bash tests/launcher.test.sh
-bash tests/helper-repair.test.sh
-```
 
 The suites cover peer registry retention/expiry, command correlation, request decisions,
 cancel/completed/failed event separation, truncated and checksum-mismatched uploads,
 atomic equal-name commits, traversal rejection, progress backpressure, TLS pinning,
 HTTP `/register` fallback, and a session whose activity is older than five minutes while
-an upload is still active. Incoming-PIN coverage includes secure startup,
+an upload is still active. Name sanitisation is covered for `Model.displayName` (markup, control characters,
+whitespace, length cap, leading-flag rejection, emoji survival, idempotence) and
+for the ingestion points that use it: `upsertDevice`, `resolveDeviceName`, and the
+hostname read. `QuickShare.noteDevices` does **not** yet route its alias through it.
+Incoming-PIN coverage includes secure startup,
 atomic persistence and rollback, exact `401`/`429` behavior, bounded per-IP
 failure state, text/file authorization before events, live PIN changes and an
 already authorized upload continuing after a change.
@@ -63,7 +52,20 @@ non-guest LAN. Confirm TCP and UDP 53317 are allowed.
 9. Toggle Nearby ON→OFF→ON repeatedly and verify with `ss -lntup` that OFF leaves no
    TCP/UDP 53317 listener or helper process.
 10. Test aliases, filenames and text containing `<b>`, quotes, `$()`, newlines and emoji.
-    They must render literally and must not execute commands or markup.
+    They must not execute commands or markup, and must not be able to alter the
+    panel's layout. Quotes, `$()` and emoji render literally. Angle brackets are
+    an exception: `Model.displayName` removes `<` and `>` from remote-supplied
+    names at ingestion, so `<b>Phone</b>` displays as `bPhone/b`. That is
+    deliberate. Three of the render sinks are `Button.text` and
+    `PanelHero.title`/`meta` in the packaged Omarchy UI kit, which this plugin
+    cannot set `textFormat` on, so escaping instead of removing would render as
+    markup in one sink and as a raw entity in another. Removing at the single
+    ingestion point is the only option that holds for every sink.
+
+    Not yet verified: `Model.displayName` does not touch `&`, and Qt's
+    `mightBeRichText()` heuristic may treat a leading `&lt;` entity as rich text.
+    Check that against the shipped Qt build before relying on entity-bearing
+    names being inert.
 11. Enable Nearby incoming PIN `123456`. From official LocalSend, verify missing
     and incorrect PINs do not surface a request, while the correct PIN reaches
     the normal Accept/Decline flow for both text and files.
@@ -91,3 +93,9 @@ with v2.1 and also returns v2.2's `422` for a declared SHA-256 mismatch. Discove
 are pinned for TLS, but LocalSend's published advisory states that UDP discovery itself is not
 authenticated and currently lists no patched release; this LAN-level MITM limitation cannot be
 removed unilaterally without a protocol/pairing change.
+
+<!-- Merge note: the local single-entrypoint `bash tests/all.sh` is kept instead of
+     upstream's expanded per-file list (node model/panel-state/service-state plus
+     tests/launcher.test.sh and tests/helper-repair.test.sh); ensure tests/all.sh
+     runs upstream's launcher and helper-repair suites. Item 10 keeps the local
+     angle-bracket-removal wording over upstream's "render literally". -->
