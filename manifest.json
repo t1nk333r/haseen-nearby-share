@@ -43,8 +43,5 @@
       "default": "",
       "description": "The advertised name when deviceNameMode is custom"
     }
-  },
-  "omarchy": {
-    "clonedFrom": "oma.nearby"
   }
 }
