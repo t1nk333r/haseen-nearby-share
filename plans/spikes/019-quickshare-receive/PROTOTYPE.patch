@@ -1,0 +1,259 @@
+diff --git i/src/main.rs w/src/main.rs
+index 928f7cd..a8d0dd0 100644
+--- i/src/main.rs
++++ w/src/main.rs
+@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand};
+ use rqs_lib::channel::{ChannelMessage, Message, TransferAction, TransferKind};
+ use rqs_lib::hdl::info::{TransferMetadata, TransferPayload};
+ use rqs_lib::{DeviceType, EndpointInfo, OutboundPayload, RQS, SendInfo, TransferState, Visibility};
++use serde_json::json;
+ use tokio::sync::broadcast;
+ use tokio::sync::broadcast::error::RecvError;
+ 
+@@ -44,6 +45,12 @@ enum Cmd {
+         /// Exit after the first transfer.
+         #[arg(long)]
+         once: bool,
++        /// Machine-readable events on stdout, answers on stdin (see PROTOCOL.md).
++        #[arg(long)]
++        events: bool,
++        /// Seconds to wait for a consent answer before declining (--events only).
++        #[arg(long, default_value_t = 60)]
++        consent_timeout: u64,
+     },
+     /// Send files to a nearby device.
+     Send {
+@@ -84,7 +91,9 @@ async fn main() {
+ 
+ async fn run(cli: Cli) -> Result<i32> {
+     match cli.cmd {
+-        Cmd::Receive { out, yes, once } => cmd_receive(cli.name, cli.port, out, yes, once).await,
++        Cmd::Receive { out, yes, once, events, consent_timeout } => {
++            cmd_receive(cli.name, cli.port, out, yes, once, events, consent_timeout).await
++        }
+         Cmd::Send { files, to, timeout, yes } => {
+             cmd_send(cli.name, cli.port, files, to, timeout, yes).await
+         }
+@@ -118,9 +127,17 @@ async fn cmd_receive(
+     out: Option<PathBuf>,
+     yes: bool,
+     once: bool,
++    events: bool,
++    consent_timeout: u64,
+ ) -> Result<i32> {
++    // The two are contradictory: one asks the stream, the other answers for it.
++    // Allowing both is how an auto-accept ships by accident.
++    if events && yes {
++        eprintln!("qs receive: --events and --yes are contradictory; refusing to start.");
++        return Ok(2);
++    }
+     let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+-    if !interactive && !yes {
++    if !events && !interactive && !yes {
+         eprintln!("qs receive: not a TTY — refusing to auto-accept; pass --yes to accept incoming transfers.");
+         return Ok(2);
+     }
+@@ -135,6 +152,55 @@ async fn cmd_receive(
+         "Receiving as \"{}\" — send a file from your phone…  (Ctrl-C to stop)",
+         rqs.get_device_name()
+     );
++    if events {
++        emit(json!({
++            "event": "ready",
++            "v": 1,
++            "name": rqs.get_device_name(),
++            "out": out_dir.display().to_string(),
++        }));
++    }
++
++    // Answers arrive on stdin, one JSON object per line. The reader is a plain
++    // blocking thread: no tokio feature beyond a channel, and a closed pipe is
++    // reported as EOF rather than mistaken for silence.
++    let (answer_tx, mut answer_rx) = tokio::sync::mpsc::unbounded_channel::<Option<(String, bool)>>();
++    if events {
++        std::thread::spawn(move || {
++            use std::io::BufRead;
++            let stdin = std::io::stdin();
++            for line in stdin.lock().lines() {
++                let Ok(line) = line else { break };
++                let trimmed = line.trim();
++                if trimmed.is_empty() {
++                    continue;
++                }
++                let value: serde_json::Value = match serde_json::from_str(trimmed) {
++                    Ok(value) => value,
++                    Err(_) => {
++                        eprintln!("qs receive: ignoring unparseable command line");
++                        continue;
++                    }
++                };
++                let accept = match value.get("command").and_then(|c| c.as_str()) {
++                    Some("accept") => true,
++                    Some("decline") => false,
++                    _ => {
++                        eprintln!("qs receive: ignoring unknown command");
++                        continue;
++                    }
++                };
++                let id = value.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
++                if answer_tx.send(Some((id, accept))).is_err() {
++                    break;
++                }
++            }
++            let _ = answer_tx.send(None);
++        });
++    }
++    let mut early_answers: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
++    let mut answered: std::collections::HashSet<String> = std::collections::HashSet::new();
++    let mut last_progress: std::time::Instant = std::time::Instant::now();
+ 
+     let sender = rqs.message_sender.clone();
+     let mut rx = rqs.message_sender.subscribe();
+@@ -144,6 +210,16 @@ async fn cmd_receive(
+     loop {
+         tokio::select! {
+             _ = tokio::signal::ctrl_c() => { eprintln!("\nStopping."); break; }
++            // EOF on the event stream means the frontend that answers for this
++            // machine is gone. Nothing pending is left to decline here (a
++            // pending consent is handled inside the wait above), so stop.
++            closed = answer_rx.recv(), if events => match closed {
++                None | Some(None) => {
++                    eprintln!("qs receive: the event stream closed; stopping.");
++                    break;
++                }
++                Some(Some((id, accept))) => { early_answers.insert(id, accept); }
++            },
+             r = rx.recv() => {
+                 let cm = match r {
+                     Ok(cm) => cm,
+@@ -154,7 +230,46 @@ async fn cmd_receive(
+                 if mc.kind != TransferKind::Inbound { continue; }
+                 match &mc.state {
+                     Some(TransferState::WaitingForUserConsent) => {
+-                        let accept = prompt_consent(mc.metadata.as_ref(), yes, interactive).await;
++                        let accept = if events {
++                            let id = cm.id.clone();
++                            match early_answers.remove(&id) {
++                                Some(answer) => answer,
++                                None => {
++                                    emit_request(&id, mc.metadata.as_ref());
++                                    let deadline = tokio::time::Instant::now()
++                                        + std::time::Duration::from_secs(consent_timeout);
++                                    let mut answer = false;
++                                    let mut timed_out = true;
++                                    let mut closed = false;
++                                    loop {
++                                        tokio::select! {
++                                            _ = tokio::time::sleep_until(deadline) => break,
++                                            incoming = answer_rx.recv() => match incoming {
++                                                None | Some(None) => { closed = true; break; }
++                                                Some(Some((id, accept))) if id == cm.id => {
++                                                    answer = accept; timed_out = false; break;
++                                                }
++                                                Some(Some((other, accept))) => {
++                                                    early_answers.insert(other, accept);
++                                                }
++                                            },
++                                        }
++                                    }
++                                    answered.insert(id.clone());
++                                    if timed_out {
++                                        eprintln!("Declined (no answer within {consent_timeout}s).");
++                                        emit(json!({"event": "failed", "id": id, "reason": "timeout"}));
++                                    }
++                                    if closed {
++                                        eprintln!("Declined (the event stream closed).");
++                                        emit(json!({"event": "failed", "id": id, "reason": "cancelled"}));
++                                    }
++                                    answer
++                                }
++                            }
++                        } else {
++                            prompt_consent(mc.metadata.as_ref(), yes, interactive).await
++                        };
+                         let action = if accept {
+                             TransferAction::ConsentAccept
+                         } else {
+@@ -167,16 +282,40 @@ async fn cmd_receive(
+                         }
+                     }
+                     Some(TransferState::ReceivingFiles) => {
+-                        if let Some(m) = mc.metadata.as_ref() { prog.update(m); }
++                        if let Some(m) = mc.metadata.as_ref() {
++                            prog.update(m);
++                            if events && last_progress.elapsed() >= std::time::Duration::from_millis(250) {
++                                last_progress = std::time::Instant::now();
++                                emit(json!({
++                                    "event": "progress",
++                                    "id": cm.id,
++                                    "received": m.ack_bytes,
++                                    "total": m.total_bytes,
++                                }));
++                            }
++                        }
+                     }
+                     Some(TransferState::Finished) => {
+                         prog.finish();
+-                        report_received(mc.metadata.as_ref(), &out_dir);
++                        if events {
++                            let files = transfer_file_names(mc.metadata.as_ref());
++                            let paths: Vec<String> = files
++                                .iter()
++                                .map(|f| out_dir.join(f).display().to_string())
++                                .collect();
++                            eprintln!("✓ Received {} file(s) → {}", files.len(), out_dir.display());
++                            emit(json!({"event": "done", "id": cm.id, "paths": paths}));
++                        } else {
++                            report_received(mc.metadata.as_ref(), &out_dir);
++                        }
+                         if once { break; }
+                     }
+                     Some(s @ (TransferState::Rejected | TransferState::Cancelled | TransferState::Disconnected)) => {
+                         prog.abandon();
+                         eprintln!("Transfer {}.", state_name(s));
++                        if events && !answered.contains(&cm.id) {
++                            emit(json!({"event": "failed", "id": cm.id, "reason": state_name(s)}));
++                        }
+                         if once { exit_code = 2; break; }
+                     }
+                     _ => {}
+@@ -221,6 +360,39 @@ async fn prompt_consent(m: Option<&TransferMetadata>, yes: bool, interactive: bo
+     .unwrap_or(false)
+ }
+ 
++fn emit(value: serde_json::Value) {
++    println!("{value}");
++}
++
++fn emit_request(id: &str, m: Option<&TransferMetadata>) {
++    let (sender, pin, files, size) = summarize(m);
++    let payload = match m.and_then(|m| m.payload.as_ref()) {
++        Some(TransferPayload::Text(_)) => "text",
++        Some(TransferPayload::Url(_)) => "url",
++        Some(TransferPayload::Wifi { .. }) => "wifi",
++        _ => "files",
++    };
++    emit(json!({
++        "event": "request",
++        "id": id,
++        "sender": sender,
++        "payload": payload,
++        "files": files,
++        "total": size,
++        "pin": pin,
++    }));
++}
++
++fn transfer_file_names(m: Option<&TransferMetadata>) -> Vec<String> {
++    match m.and_then(|m| m.payload.as_ref()) {
++        Some(TransferPayload::Files(v)) => v.clone(),
++        Some(TransferPayload::Text(_)) => vec!["<text>".into()],
++        Some(TransferPayload::Url(_)) => vec!["<url>".into()],
++        Some(TransferPayload::Wifi { .. }) => vec!["<wifi credentials>".into()],
++        None => Vec::new(),
++    }
++}
++
+ fn report_received(m: Option<&TransferMetadata>, out_dir: &Path) {
+     let (_who, _pin, files, _size) = summarize(m);
+     if files.is_empty() {

@@ -45,7 +45,7 @@ its STOP conditions, and update your row when done.
 | 016 | Reconcile the fork's documentation with the fork | P2 | S | 015 | TODO |
 | 017 | Correct the dependency table and stop staging inside the watched tree | P2 | S | 002 | TODO |
 | 018 | Prepare upstream bug reports for the five backend findings | P2 | M | — | TODO |
-| 019 | Spike a JSON event protocol so Quick Share can receive | P3 | L | 009, 010 | TODO |
+| 019 | Spike a JSON event protocol so Quick Share can receive | P3 | L | 009, 010 | DONE |
 | 020 | Decide in writing whether Quick Share belongs in the Rust helper | P3 | S | — | TODO |
 | 021 | Let the user choose the name this machine advertises | P2 | M | 007, 008 | DONE (shipped with 9 defects — see 022-024) |
 | 022 | Make all three device-name modes actually work | P1 | M | — | DONE |
