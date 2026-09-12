@@ -90,6 +90,41 @@ One conflict to design around: `report_received` writes the saved path to
 **stdout** (`main.rs:231`), which is the obvious channel for a line-oriented
 event stream. In `--events` mode the path belongs in the `done` event instead.
 
+## A finding from outside the source: keep-alives
+
+`grishka/NearDrop` is the only complete public write-up of this protocol (6.2k
+stars, Unlicense — freely usable, unlike `qs`, which is GPL-3.0). Its
+`PROTOCOL.md` describes the consent step the way this spike read it out of the
+library, and adds two things the source alone did not show.
+
+**Confirms the design.** The client sends an *introduction*; "the server would
+prompt the user to accept the transfer"; acceptance is a response frame with
+`status = ACCEPT`, rejection `REJECT`, and other statuses such as
+`NOT_ENOUGH_SPACE` produce different errors on the phone. That matches
+`TransferAction` and the states recorded above, and it means the decline is a
+first-class frame rather than a dropped connection.
+
+**Contradicts our assumption about idleness.** Both peers send `KEEP_ALIVE`
+offline frames every ~10 seconds, and the phone "expects the server to do the
+same … it will terminate the connection after a while" if it does not.
+`rqs_lib` at the pinned revision only *answers* keep-alives:
+`send_keepalive` has exactly one call site per direction (`inbound.rs:996`,
+`outbound.rs:528`, both `send_keepalive(true)` in reaction to receiving one),
+and no timer. Sending never notices — the traffic keeps the connection busy —
+and `receive --yes` never notices either, because it answers immediately. A
+consent prompt is the first thing in this plugin to leave the connection idle
+with the phone watching, so the 60-second consent timeout may be cut short by
+the *phone*, which would reach the user as a request that never arrived rather
+than one that timed out.
+
+Not fixable from the CLI: the frames live inside the library's encrypted
+connection. The fix belongs in `rqs_lib`'s loop (`inbound.rs:314` is the
+`tokio::select!` a timer would join), carried the way `qs-events.patch` is —
+a local patch to the library plus a `[patch]` override in the build. Whether the
+initiating frame wants `ack: true` (as the library sends when answering) is
+inferred from that code, not observed on a wire. **Unverifiable without a
+phone**, like the rest of this section.
+
 ## Reproducibility note for plan 009
 
 `--locked` pins more than `qs`: `Cargo.lock:1649` resolves the

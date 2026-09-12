@@ -246,6 +246,21 @@ Stop and report (do not improvise) if:
   write it to the protocol, test the protocol, and say plainly which half is
   unverified.
 
+## A known risk to settle before shipping
+
+`plans/spikes/019-quickshare-receive/FINDINGS.md` records it in full: the phone
+expects **both** peers to send `KEEP_ALIVE` frames every ~10 seconds and
+terminates an idle connection without them, while `rqs_lib` only answers them.
+A consent prompt is the first thing in this pane to hold the connection idle, so
+a request can be dropped by the phone mid-prompt and reach the user as a request
+that never arrived.
+
+Settle it before shipping, one way or the other: patch the library's connection
+loop to send its own keep-alives (a local patch plus a `[patch]` override in the
+build, the way `qs-events.patch` is carried), or shorten the consent timeout to
+sit well inside the phone's patience. Neither can be verified here — put it in
+the same device-testing session as the rest of the "no phone" list.
+
 ## Maintenance notes
 
 - The patch and `QS_REV` travel together. Moving the pin means re-checking
