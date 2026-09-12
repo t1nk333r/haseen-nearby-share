@@ -51,6 +51,7 @@ its STOP conditions, and update your row when done.
 | 022 | Make all three device-name modes actually work | P1 | M | — | DONE |
 | 023 | Stop a rename destroying a live transfer or misreporting the receiver | P1 | M | — | DONE |
 | 024 | Close the remaining sanitiser hole and settle "render literally" | P1 | S | — | DONE (contract resolved: names are stripped, doc amended) |
+| 025 | A receive engine for the Quick Share pane | P2 | M | 019 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale)
