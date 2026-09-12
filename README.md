@@ -84,6 +84,13 @@ at build time. `bluez` is needed because Quick Share discovery uses Bluetooth
 LE. `scripts/dependencies.sh --json` reports what is missing and
 `--install` installs it.
 
+`qs` is built from a pinned revision (`QS_REV` in `scripts/dependencies.sh`,
+also written to `bin/nearby-qs.rev` at install time) and with `--locked`, so
+everyone builds the same code from upstream's own lockfile. Bumping that
+revision is a behaviour change, not a chore: `QuickShare.qml` recovers the
+confirmation PIN and the progress from this binary's stderr prose, so a new
+revision has to be re-checked against that parser first.
+
 ## Firewall
 
 `scripts/setup_firewall.sh` opens four rules:

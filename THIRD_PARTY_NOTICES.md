@@ -6,6 +6,11 @@ The Quick Share pane executes `qs`, a CLI over a fork of `rqs_lib`.
 
 - Project: https://github.com/martinalderson/qs
 - License: GPL-3.0-or-later
+- Pinned revision: `a63bc7b3`, recorded in `scripts/dependencies.sh` as
+  `QS_REV` and written to `bin/nearby-qs.rev` at install time
+- Build: `cargo install --git … --rev "$QS_REV" --locked`, so the revision is
+  fixed and the dependency graph comes from upstream's own `Cargo.lock` rather
+  than being re-resolved from crates.io on every run
 - Underlying library: https://github.com/Martichou/rquickshare (`rqs_lib`),
   via the fork https://github.com/martinalderson/rquickshare, branch
   `feat/ble-receiver-connect-back`

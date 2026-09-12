@@ -10,6 +10,12 @@ set -uo pipefail
 plugin_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 readonly QS_REPO="https://github.com/martinalderson/qs"
+# Pinned deliberately. `cargo install --git` with no --rev tracks the default
+# branch, so two users on the same plugin commit could build different binaries
+# -- and cargo runs each crate's build.rs during that build. This is also the
+# revision QuickShare.qml's stderr parser and exit-code mapping were written
+# against, so moving it without re-checking that parser is a behaviour change.
+readonly QS_REV="a63bc7b3"
 
 # NOT installed as plain `qs`, and never invoked by bare name.
 #
@@ -119,11 +125,12 @@ EOF
     cat <<EOF
 
 Quick Share CLI will be built from source:
-  cargo install --git $QS_REPO --root <staging>
+  cargo install --git $QS_REPO --rev $QS_REV --locked --root <staging>
   installed as: $QS_BIN
 
 This compiles ~300 crates and takes several minutes on first run.
-It is GPL-3.0 software from a third party, built on your machine.
+It is GPL-3.0 software from a third party, built on your machine at the
+pinned revision above.
 EOF
   fi
 
@@ -157,7 +164,7 @@ EOF
     stage=$(mktemp -d "${plugin_dir}/bin/.qs-build.XXXXXX") || return 1
     # shellcheck disable=SC2064
     trap "rm -rf -- '$stage'" RETURN
-    cargo install --git "$QS_REPO" --root "$stage" || {
+    cargo install --git "$QS_REPO" --rev "$QS_REV" --locked --root "$stage" || {
       local status=$?
       echo "Building qs failed (exit code: $status)."
       sleep 2.5
@@ -167,6 +174,9 @@ EOF
     mkdir -p "${plugin_dir}/bin"
     mv -- "$stage/bin/qs" "$QS_BIN"
     chmod 0755 "$QS_BIN"
+    # Record what was actually built, so a later run can tell the pinned
+    # revision from whatever a hand-run cargo install left behind.
+    printf '%s\n' "$QS_REV" > "${QS_BIN}.rev"
     echo "Installed $QS_BIN"
   fi
 

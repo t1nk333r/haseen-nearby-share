@@ -35,7 +35,7 @@ its STOP conditions, and update your row when done.
 | 006 | Make the firewall rules match what the script tells the user | P2 | S | 005 | TODO |
 | 007 | Export and test the fork's two `Model.js` helpers | P1 | S | — | **PARTIAL** — exported, but `modeIn`/`quickShareIconFor` still have zero assertions; the tests were the deliverable |
 | 008 | Sanitise remote device names at the ingestion boundary | P1 | S | — | DONE (partial: `displayName` + `upsertDevice`; `Panel.qml` textFormat and `QuickShare.noteDevices` still TODO) |
-| 009 | Pin the Quick Share CLI to a reviewed revision | P1 | S | — | TODO |
+| 009 | Pin the Quick Share CLI to a reviewed revision | P1 | S | — | DONE |
 | 010 | Cover the Quick Share CLI contract with tests | P1 | M | 009 | TODO |
 | 011 | Harden the Quick Share engine's process lifecycle | P1 | M | 010 | TODO |
 | 012 | Make the two panes coexist coherently | P2 | M | 003, 004 | TODO |
