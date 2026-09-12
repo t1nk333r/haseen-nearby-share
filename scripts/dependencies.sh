@@ -16,6 +16,10 @@ readonly QS_REPO="https://github.com/martinalderson/qs"
 # revision QuickShare.qml's stderr parser and exit-code mapping were written
 # against, so moving it without re-checking that parser is a behaviour change.
 readonly QS_REV="a63bc7b3"
+# The receive patch, and what it buys: `--events` plus the consent timeout it
+# implies. Without it a panel cannot answer Quick Share's consent question at
+# all — the CLI declines every inbound transfer it cannot prompt for.
+readonly PATCH_QS_EVENTS="${plugin_dir}/patches/qs-events.patch"
 
 # NOT installed as plain `qs`, and never invoked by bare name.
 #
@@ -125,7 +129,8 @@ EOF
     cat <<EOF
 
 Quick Share CLI will be built from source:
-  cargo install --git $QS_REPO --rev $QS_REV --locked --root <staging>
+  git clone $QS_REPO → checkout $QS_REV → apply patches/qs-events.patch
+  cargo install --path <clone> --locked --root <staging>
   installed as: $QS_BIN
 
 This compiles ~300 crates and takes several minutes on first run.
@@ -160,11 +165,33 @@ EOF
       rustup default stable || { echo "rustup failed."; sleep 2.5; return 1; }
     fi
     echo "Building the Quick Share CLI (this takes a while)..."
-    local stage
+    local stage src
     stage=$(mktemp -d "${plugin_dir}/bin/.qs-build.XXXXXX") || return 1
+    src=$(mktemp -d "${plugin_dir}/bin/.qs-src.XXXXXX") || return 1
     # shellcheck disable=SC2064
-    trap "rm -rf -- '$stage'" RETURN
-    cargo install --git "$QS_REPO" --rev "$QS_REV" --locked --root "$stage" || {
+    trap "rm -rf -- '$stage' '$src'" RETURN
+    # Cloned and patched rather than `cargo install --git`: the event protocol
+    # in patches/qs-events.patch is what lets the widget answer Quick Share's
+    # consent prompt without owning a terminal, and `--locked` keeps the
+    # dependency graph on upstream's own lockfile. A failed apply is a hard
+    # stop, not a warning — building unpatched would silently drop receive back
+    # to the TTY-only path that cannot be driven from a panel at all.
+    git clone --quiet "$QS_REPO" "$src" || {
+      echo "Cloning the Quick Share CLI failed."
+      sleep 2.5
+      return 1
+    }
+    git -C "$src" checkout --quiet "$QS_REV" || {
+      echo "The pinned revision $QS_REV is not in that clone."
+      sleep 2.5
+      return 1
+    }
+    git -C "$src" apply "$PATCH_QS_EVENTS" || {
+      echo "$PATCH_QS_EVENTS does not apply to $QS_REV — refusing to build an unpatched CLI."
+      sleep 2.5
+      return 1
+    }
+    cargo install --path "$src" --locked --root "$stage" || {
       local status=$?
       echo "Building qs failed (exit code: $status)."
       sleep 2.5

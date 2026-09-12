@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Quick Share can be told to receive.** `patches/qs-events.patch` adds
+  `--events` to `qs receive`: one JSON object per line on stdout (`ready`,
+  `request`, `progress`, `done`, `failed`) and `accept`/`decline` on stdin, with
+  a consent timeout, EOF declining everything pending, and `--events --yes`
+  refused outright rather than tolerated. `scripts/dependencies.sh` now clones
+  the pinned revision, applies the patch, and builds that. The pane does not
+  consume it yet — that engine is the next piece of work, and until it lands
+  Quick Share still sends only.
+
 ## 1.2.0
 
 - Bound helper commands, outgoing text and the live peer registry so oversized

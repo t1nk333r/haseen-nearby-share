@@ -36,12 +36,20 @@ CLI over a fork of `rqs_lib`, as short-lived subprocesses.
 built from source on your machine by `scripts/dependencies.sh` and executed as
 a separate program. This repository stays MIT.
 
-**Sending works. Receiving is not offered.** `qs receive` refuses to run
-without a TTY unless given `--yes`, which auto-accepts every inbound transfer
-on the network with no chance to decline. Rather than ship that behind a
-toggle, the pane sends only. Receiving needs a `qs` that can report an incoming
-request as an event and take an accept/decline answer back; until then, use the
-LocalSend pane, which has a real consent prompt.
+**Sending works. Receiving is fixed in the CLI, and not yet in the pane.**
+The blocker this pane documented was `qs receive`: it refused to run without a
+TTY unless given `--yes`, which auto-accepts every inbound transfer on the
+network with no chance to decline. That is now fixed where it belongs.
+`patches/qs-events.patch` adds `--events`, a line-oriented protocol that reports
+an incoming request as an event and takes an accept or decline on stdin —
+defaulting to decline on every path: no answer within the timeout, a closed
+stream, a malformed command, an unknown id. `scripts/dependencies.sh` clones the
+pinned revision and applies that patch before building.
+
+What remains is the consumer: a receive engine in `QuickShare.qml` that speaks
+the protocol and drives the request queue and the consent column this pane
+already has for LocalSend. Until it lands, the pane still sends only, and the
+LocalSend pane is still the one that can receive.
 
 Quick Share also sends files only. `rqs_lib` can carry text, but the CLI
 exposes no way to hand it any -- use LocalSend for clipboard text.
