@@ -658,7 +658,7 @@ Panel {
         }
 
         Column {
-          visible: !root.quickShareMode && root.viewState==="sending"||root.viewState==="receiving"; width:parent.width; spacing:Style.space(8)
+          visible: !root.quickShareMode && (root.viewState==="sending"||root.viewState==="receiving"); width:parent.width; spacing:Style.space(8)
           PanelSectionHeader { text:root.viewState==="sending" ? "SENDING" : "RECEIVING"; foreground:root.foreground; fontFamily:root.fontFamily }
           Text { width:parent.width; textFormat:Text.PlainText; text:root.transferName; color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.title; font.bold:true; elide:Text.ElideMiddle }
           Rectangle { width:parent.width; height:Style.space(4); radius:height/2; color:Qt.darker(root.foreground,2.2); Rectangle { width:parent.width*Math.max(0,Math.min(1,root.progress)); height:parent.height; radius:height/2; color:root.foreground; Behavior on width { NumberAnimation { duration:120 } } } }
@@ -667,7 +667,7 @@ Panel {
         }
 
         Column {
-          visible: !root.quickShareMode && root.viewState==="success"||root.viewState==="error"; width:parent.width; spacing:Style.space(8)
+          visible: !root.quickShareMode && (root.viewState==="success"||root.viewState==="error"); width:parent.width; spacing:Style.space(8)
           Text { width:parent.width; textFormat:Text.PlainText; text:root.viewState==="success" ? root.statusText : root.errorText; wrapMode:Text.Wrap; color:root.viewState==="error"?root.urgent:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.title; font.bold:true }
           Text { visible:root.viewState==="success"; width:parent.width; textFormat:Text.PlainText; text:root.transferPeer!=="" ? (root.statusText==="Sent"?"to ":"from ")+root.transferPeer : ""; wrapMode:Text.Wrap; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body }
           Button { text:"Done"; bordered:true; foreground:root.foreground; hasCursor:root.cursorActive; onClicked:root.finishTerminal() }
