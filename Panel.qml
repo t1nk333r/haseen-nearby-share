@@ -53,6 +53,10 @@ Panel {
   readonly property string qsTransferPeer: qs ? qs.transferPeer : ""
   readonly property string qsTransferPin: qs ? qs.transferPin : ""
   readonly property var qsMissingDeps: qs ? qs.missingDeps : []
+  // True when the engine is not merely missing its helper but switched off for
+  // this machine's hardware: the pane explains that instead of offering an
+  // install that cannot turn it on.
+  readonly property bool qsMachineDisabled: qs ? qs.disabledOnThisMachine : false
 
   // The engine resolves the plugin directory from its own manifest metadata,
   // which is the only place that knows where an installed copy actually is.
@@ -320,7 +324,10 @@ Panel {
       }
       if (qsViewState === "sending") { qsCancel(); return }
       if (qsViewState === "success" || qsViewState === "error") { qsFinish(); return }
-      if (!qsAvailable) { installDependencies(); return }
+      // There is nothing to build when the engine is off for this machine's
+      // chip, so the row cannot fire the installer; the pane's own text says
+      // why. A machine that is merely missing the helper still gets the build.
+      if (!qsAvailable) { if (!root.qsMachineDisabled) installDependencies(); return }
       if (selectedIndex >= 0 && selectedIndex < qsDevices.length) qsChooseDevice(selectedIndex)
       else if (selectedIndex === qsDevices.length) qsScan()
       return
@@ -751,13 +758,17 @@ Panel {
 
           PanelSectionHeader { text: root.qsAvailable ? "DEVICES" : "SETUP"; foreground:root.foreground; fontFamily:root.fontFamily }
 
-          // Not installed: name what is missing instead of an empty list.
+          // Explains itself twice over: a missing helper can be built, a
+          // machine that cannot carry the transport cannot. The install action
+          // is only offered in the first case.
           Column {
             visible: !root.qsAvailable && root.qsChecked
             width: parent.width; spacing: Style.space(6)
             Text {
               width:parent.width; textFormat:Text.PlainText; wrapMode:Text.Wrap
-              text:"Quick Share needs a helper this plugin does not ship. It is built from source on this machine."
+              text: root.qsMachineDisabled
+                ? "Quick Share is off on this machine: its direct device-to-device link needs a Wi-Fi radio this box's chip does not have. Nothing is missing and nothing is worth installing — the engine is commented out in the plugin, not deleted."
+                : "Quick Share needs a helper this plugin does not ship. It is built from source on this machine."
               color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body
             }
             Text {
@@ -767,6 +778,7 @@ Panel {
               color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.body
             }
             Button {
+              visible: !root.qsMachineDisabled
               width:parent.width; bordered:true; iconText:"󰇚"; text:"Install dependencies"
               tooltipText:"Opens a terminal to install what is missing"
               foreground:root.foreground; fontFamily:root.fontFamily

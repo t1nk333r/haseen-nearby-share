@@ -367,8 +367,12 @@ Item {
     openViewCount++
     if (openViewCount !== 1) return
     if (quickShareMode) {
-      quickShareEngine.refreshDependencies()
-      if (quickShareEngine.available && quickShareEngine.viewState === "nearby") quickShareEngine.scan()
+      // Quick Share is disabled on this machine -- QuickShare.qml's Process
+      // blocks are commented out, so there is nothing to probe and nothing to
+      // scan. The branch still returns: a Quick Share popup must not fall
+      // through to LocalSend discovery.
+      // quickShareEngine.refreshDependencies()
+      // if (quickShareEngine.available && quickShareEngine.viewState === "nearby") quickShareEngine.scan()
       return
     }
     if (viewState === "nearby" && receiverEnabled && backendReady) startDiscovery()
@@ -532,8 +536,10 @@ Item {
     persistMode(wanted)
     cursorRequested(0)
     if (wanted === "quickshare") {
-      quickShareEngine.refreshDependencies()
-      if (anyViewOpen && quickShareEngine.available) quickShareEngine.scan()
+      // Disabled on this machine: the probe and the scan are commented out in
+      // QuickShare.qml, so switching to the pane starts nothing.
+      // quickShareEngine.refreshDependencies()
+      // if (anyViewOpen && quickShareEngine.available) quickShareEngine.scan()
     }
   }
 
