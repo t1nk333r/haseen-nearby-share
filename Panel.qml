@@ -424,7 +424,7 @@ Panel {
   }
 
   BarIconButton {
-    id: button; anchors.fill: parent; bar: root.bar; text: "󰀂"
+    id: button; anchors.fill: parent; bar: root.bar; text: "\u{f02b9}"
     foreground: root.barIconColor
     active: root.incoming !== null || root.viewState === "receiving" || root.viewState === "sending" || root.viewState === "pin"
     tooltipText: !root.receiverEnabled ? "Nearby · Turned off" : (root.backendReady ? (root.viewState === "pin" ? "Nearby · PIN required" : (root.incoming ? "Incoming transfer" : "Nearby · Ready to receive")) : "Nearby · Receiver unavailable")
@@ -449,7 +449,7 @@ Panel {
           meta: root.heroMetaText
           detail: ""
           foreground: root.foreground; fontFamily: root.fontFamily
-          iconComponent: Component { Text { text: root.viewState === "incoming" ? "󰁅" : "󰀂"; color: root.incoming ? root.urgent : root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.display } }
+          iconComponent: Component { Text { text: root.viewState === "incoming" ? "\u{f0045}" : "\u{f02b9}"; color: root.incoming ? root.urgent : root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.display } }
           trailingControl: !root.quickShareMode && root.viewState === "nearby" ? nearbyHeroControls : null
         }
         Component {
