@@ -22,9 +22,9 @@ cargo fmt --manifest-path backend/Cargo.toml --all -- --check
 
 ## [SYSTEM_FLOW]
 
-One protocol (LocalSend) behind one bar widget: the second, Quick Share, is
-commented out on this machine together with the two buttons that selected it —
-see the switcher note in `Panel.qml` and the engine note in `QuickShare.qml`.
+Two protocols behind one bar widget, selected by two buttons at the top of the
+popup — which are drawn only while the radio probe says the Quick Share half can
+actually run.
 
 ```
 Bar (one Panel.qml PER MONITOR — view only, owns nothing singular)
@@ -60,9 +60,16 @@ Invariants that govern every change:
 - **Automatic paths notify; explicit paths act.** No git hook or timer may invoke a
   privileged operation (plan 013).
 - Cursor indices in the LocalSend nearby view run negative: `-3` name cog,
-  `-1` receiver toggle, then `0..n` rows. `-2` was the protocol switcher and is
-  gone with it — `moveCursor`'s LocalSend walk steps over the gap — so the clamp,
-  `activateCursor`'s branch, and each row's own `hasCursor` must be changed together.
+  `-2` protocol switcher, `-1` receiver toggle, then `0..n` rows. `-2` is only a
+  stop while the switcher is drawn (`qsAvailable`); when it is hidden, the walk
+  steps over the gap and the Quick Share pane's own rows start at 0 either way.
+  `moveCursor`'s clamp, `activateCursor`'s branch, and each row's own `hasCursor`
+  must be changed together.
+- **The Quick Share half gates on capability, never on a flag.** `scripts/dependencies.sh
+  --json` reports a `radio` object beside the dependency list (Bluetooth present and
+  powered; a Wi-Fi interface that is up, with P2P in its phy), and QuickShare.qml makes
+  `available` the conjunction of the two halves. The pane prints the probe's own
+  `reason` sentence, so a radio that is down never reads as "install something".
 - **Settings are read from `~/.config/omarchy/shell.json` and written through
   `shell.updateEntryInline`.** `shell` is `services/PluginShellApi.qml`, the whole
   surface an installed third-party plugin gets: it has **no `shellConfig`**, and

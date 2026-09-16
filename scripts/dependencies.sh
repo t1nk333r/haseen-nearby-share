@@ -73,6 +73,70 @@ missing_ids() {
   done < <(deps)
 }
 
+# Radio capability, for the Quick Share half only.
+#
+# Quick Share finds a phone over Bluetooth LE and moves the bytes over Wi-Fi,
+# so a machine with every dependency installed but the radio down can do
+# nothing -- which is the ordinary state of a desktop that lives on Ethernet.
+# The engine gates on this probe rather than on a hand-set flag, so the pane
+# comes back by itself on the day the radio does, with no edit anywhere.
+#
+# `ready` is the whole verdict; `reason` is the sentence the pane shows. It is
+# written here rather than in QML so both halves of the plugin word it the same.
+radio_json() {
+  local bt_present=false bt_powered=false
+  local wifi_iface="" wifi_up=false wifi_connected=false wifi_p2p=false
+  local reason=""
+
+  if compgen -G "/sys/class/bluetooth/hci*" >/dev/null 2>&1; then
+    bt_present=true
+    local bt_show
+    bt_show=$(timeout 5 bluetoothctl show 2>/dev/null)
+    [[ $bt_show == *"Powered: yes"* ]] && bt_powered=true
+  fi
+
+  local entry iface
+  for entry in /sys/class/net/wl*; do
+    [[ -e $entry ]] || continue
+    iface="${entry##*/}"
+    break
+  done
+
+  # Matched with [[ … ]] over captured output, never `producer | grep -q`:
+  # under `set -o pipefail`, grep -q exits on its first match, the writer takes
+  # SIGPIPE, and the pipeline reports 141 — which reads exactly like "capability
+  # absent" for any output still in flight. That is how a P2P-capable card got
+  # reported as incapable the first time this probe was written.
+  if [[ -n $iface ]]; then
+    wifi_iface="$iface"
+    # Administrative state, not carrier state: a Wi-Fi Direct group is created
+    # by a radio that is switched on, and it does not need the interface to be
+    # associated with anything. IFF_UP is bit 0 of the flags word.
+    local flags link phy info
+    flags=$(cat "/sys/class/net/$iface/flags" 2>/dev/null)
+    (( flags & 0x1 )) && wifi_up=true
+    link=$(timeout 5 iw dev "$iface" link 2>/dev/null)
+    [[ $link == "Connected to"* ]] && wifi_connected=true
+    phy=$(basename "$(readlink -f "/sys/class/net/$iface/phy80211" 2>/dev/null)" 2>/dev/null)
+    if [[ -n $phy ]]; then
+      info=$(timeout 5 iw phy "$phy" info 2>/dev/null)
+      [[ $info == *"P2P-GO"* ]] && wifi_p2p=true
+    fi
+  fi
+
+  # The first failing condition, in the order a person would check them.
+  if   [[ $bt_present == false ]]; then reason="no Bluetooth adapter is present"
+  elif [[ $bt_powered == false ]]; then reason="the Bluetooth adapter is powered off"
+  elif [[ -z $wifi_iface ]];     then reason="this machine has no Wi-Fi interface"
+  elif [[ $wifi_up == false ]];  then reason="the Wi-Fi radio ($wifi_iface) is down"
+  elif [[ $wifi_p2p == false ]]; then reason="the Wi-Fi driver ($wifi_iface) does not support Wi-Fi Direct"
+  fi
+
+  printf '"radio":{"bluetooth":{"present":%s,"powered":%s},"wifi":{"iface":"%s","up":%s,"connected":%s,"p2p":%s},"ready":%s,"reason":"%s"}' \
+    "$bt_present" "$bt_powered" "$wifi_iface" "$wifi_up" "$wifi_connected" "$wifi_p2p" \
+    "$([[ -z $reason ]] && echo true || echo false)" "$reason"
+}
+
 emit_json() {
   local id label probe pkgs scope first=1
   printf '{"deps":['
@@ -85,7 +149,9 @@ emit_json() {
     printf '{"id":"%s","label":"%s","scope":"%s","present":%s}' \
       "$id" "$label" "$scope" "$present"
   done < <(deps)
-  printf ']}\n'
+  printf '],'
+  radio_json
+  printf '}\n'
 }
 
 install_missing() {

@@ -153,6 +153,22 @@ function extractFunction(name) {
       else if (character === quote) quote = ""
       continue
     }
+    // Comments come before the quote test on purpose: prose is allowed to hold
+    // an apostrophe ("the pane's own rows"), and without this the extractor
+    // reads that apostrophe as an opening string and swallows the rest of the
+    // function. The Quick Share harness learned the same lesson first.
+    if (character === "/" && source[index + 1] === "/") {
+      const end = source.indexOf("\n", index)
+      if (end === -1) break
+      index = end
+      continue
+    }
+    if (character === "/" && source[index + 1] === "*") {
+      const end = source.indexOf("*/", index + 2)
+      assert.notEqual(end, -1, `${name}: unterminated block comment`)
+      index = end + 1
+      continue
+    }
     if (character === '"' || character === "'") quote = character
     else if (character === "{") depth++
     else if (character === "}" && --depth === 0) return source.slice(start, index + 1)
@@ -489,24 +505,34 @@ function callNames(state) {
   state.moveCursor(0, 5)
   assert.equal(state.selectedIndex, 3, "the cursor stops on incoming PIN settings after rescan")
   state.moveCursor(0, -9)
-  // Two controls sit above the device list, and each must be its own stop:
-  // -3 the device-name cog, -1 the receiver switch. The gap between them is
-  // the protocol switcher's old row (-2), removed with Quick Share from the
-  // pane and from the walk, which steps over it rather than stopping on a row
-  // that no longer draws.
+  // Three controls sit above the device list, and each must be its own stop:
+  // -3 the device-name cog, -2 the protocol switcher, -1 the receiver switch.
+  // The ceiling has moved twice as controls were added, so this walks the whole
+  // run rather than asserting a single index.
   assert.equal(state.selectedIndex, -3, "the cursor stops on the device-name cog, the topmost control")
   state.moveCursor(0, 1)
-  assert.equal(state.selectedIndex, -1, "the receiver switch is the next stop, over the removed switcher row")
+  assert.equal(state.selectedIndex, -2, "the mode switcher is a stop below the cog")
   state.moveCursor(0, 1)
-  assert.equal(state.selectedIndex, 0, "and the device list follows the receiver switch")
+  assert.equal(state.selectedIndex, -1, "the receiver switch stays reachable below the mode switcher")
   state.moveCursor(0, -1)
-  assert.equal(state.selectedIndex, -1, "coming back up stops on the receiver switch, not in the gap")
-  state.moveCursor(0, -1)
-  assert.equal(state.selectedIndex, -3, "and carries on to the cog, skipping the gap again")
+  assert.equal(state.selectedIndex, -2)
   state.selectedIndex = 2
   state.moveCursor(1, 0)
   assert.equal(state.selectedIndex, 3, "left and right must navigate the compact Nearby action row")
   assert.equal(state.engine.calls.length, 0, "moving a cursor is local to one monitor")
+}
+
+// The switcher is drawn only while the engine can run (deps present, radio
+// ready). When it is hidden its row is a gap the walk must carry past, or the
+// cursor lands on something that is not there and Enter changes panes.
+{
+  const state = panel({viewState: "nearby", qsAvailable: false,
+    devices: [{alias: "A"}, {alias: "B"}], selectedIndex: -3})
+  state.moveCursor(0, 1)
+  assert.equal(state.selectedIndex, -1, "the receiver switch follows the cog, over the hidden switcher's row")
+  state.moveCursor(0, -1)
+  assert.equal(state.selectedIndex, -3, "and back up, skipping it again")
+  assert.equal(state.engine.calls.length, 0, "still a local move")
 }
 
 {
@@ -700,6 +726,4 @@ console.log("panel state tests passed")
 // copyUpdateCommand) is adopted, but where upstream and the fork genuinely
 // disagree -- the repository URL and the plugin id in the recovery command --
 // the local fork values (t1nk333r/omarchy-nearby-share, t1nk33r.nearby-share)
-// are kept, along with the fork's Quick Share pane. Quick Share's engine is
-// commented out on this machine and its switcher row is gone with it, so the
-// cursor run now steps over the -2 gap rather than stopping in it.
+// are kept, along with the fork's Quick Share pane and mode-switcher cursor row.

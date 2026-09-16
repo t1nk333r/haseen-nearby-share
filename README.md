@@ -7,12 +7,12 @@ at the top.
 > lives in are [jfg96/omarchy-nearby](https://github.com/jfg96/omarchy-nearby)
 > (MIT), unchanged except where noted below. What this fork adds is the Quick
 > Share pane, the mode switcher, dependency installation on pull, and the
-> firewall script. Upstream is kept as a git remote so fixes can be rebased in.
->
-> On this machine Quick Share itself is commented out, and the switcher that
-> offered its pane is commented out with it: the chip in this box cannot carry
-> the direct device-to-device transport, so the pane could only ever say so.
-> `QuickShare.qml` and `Panel.qml` carry the reason and the restore recipe.
+> firewall script. The Quick Share half also gates on a radio probe rather than
+> on a hand-set flag: with the CLI installed but the Wi-Fi radio down — an
+> Ethernet desktop's ordinary state — the pane and its switcher stay out of the
+> way instead of offering a transfer that cannot happen, and they come back on
+> the day the radio does. Upstream is kept as a git remote so fixes can be
+> rebased in.
 >
 > Independent project. Not affiliated with or endorsed by LocalSend, Google or
 > Omarchy.

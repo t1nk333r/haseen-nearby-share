@@ -28,24 +28,19 @@ Item {
 
   readonly property string binary: pluginDir + "/bin/nearby-qs"
 
-  // Dependency state. Nothing probes scripts/dependencies.sh any more -- that
-  // probe is commented out below -- so these are the engine's standing verdict,
-  // not a starting point. `available` is false because Quick Share cannot run
-  // on this machine, and `depsChecked` is true because there is nothing left to
-  // wait on: the panel's SETUP branch renders on exactly that pair, so the pane
-  // explains itself instead of sitting empty while a probe that will never
-  // arrive is pending. `available` is still the one the panel gates on.
+  // Dependency AND radio state, both refreshed from scripts/dependencies.sh
+  // rather than guessed. `available` is the one the panel gates on, and it is
+  // the conjunction: the CLI can be installed and the radio still not ready --
+  // a desktop that lives on Ethernet is the ordinary case here -- so the
+  // probe's radio verdict is part of it and its sentence is what the pane
+  // shows. Nothing is hand-set: the engine comes back by itself on the day the
+  // radio does.
   property bool available: false
-  property bool depsChecked: true
+  property bool depsChecked: false
   property var missingDeps: []
   readonly property bool buildRequired: missingDeps.indexOf("qs") >= 0
-
-  // Disabled for good on this machine, and the panel is told so rather than
-  // left to offer a build that would change nothing: the chip in this box has
-  // no radio that can carry Quick Share's direct device-to-device transport.
-  // Restoring the engine means setting this false (or deleting it) in the same
-  // edit that uncomments the Process blocks below.
-  readonly property bool disabledOnThisMachine: true
+  property bool radioReady: false
+  property string radioReason: ""
 
   property var devices: []
   property bool scanning: false
@@ -54,10 +49,7 @@ Item {
   // Mirrors Service.qml's vocabulary so the panel can switch on the same
   // strings: nearby | target | sending | success | error.
   property string viewState: "nearby"
-  // Never "idle": an idle engine implies one that could be asked to work. This
-  // is the sentence the engine is left standing in, not an error it reports,
-  // because nothing went wrong -- the machine simply cannot do this.
-  property string statusText: "Quick Share is disabled on this machine"
+  property string statusText: "Quick Share is idle"
   property string errorText: ""
   property real progress: 0
   property string transferName: ""
@@ -67,13 +59,7 @@ Item {
 
   signal cursorRequested(int index)
 
-  // Inert by design, and the reason is above the Process blocks: the probe is
-  // commented out, so there is nothing to start and nothing to wait for. The
-  // panel and the service both still call this by name, and they get the
-  // standing verdict the properties carry instead of a state that never lands.
-  function refreshDependencies() {
-    // if (!depsProbe.running) depsProbe.running = true
-  }
+  function refreshDependencies() { if (!depsProbe.running) depsProbe.running = true }
 
   function noteDependencies(payload) {
     var parsed = null
@@ -83,23 +69,28 @@ Item {
     for (var i = 0; i < parsed.deps.length; i++)
       if (!parsed.deps[i].present) missing.push(parsed.deps[i].id)
     missingDeps = missing
-    available = missing.indexOf("qs") < 0
+    // The radio half of the same report. A machine with every dependency and
+    // the radio down is the ordinary desktop here, and it must not be told to
+    // install something: `available` is the conjunction, and the reason is the
+    // probe's own sentence, so both halves of the plugin word it the same.
+    var radio = parsed.radio || null
+    radioReady = radio ? radio.ready === true : false
+    radioReason = radio && radio.reason ? String(radio.reason) : ""
+    available = missing.indexOf("qs") < 0 && radioReady
     depsChecked = true
     if (!available && viewState === "nearby")
-      statusText = "Quick Share CLI is not installed"
+      statusText = missing.indexOf("qs") >= 0
+        ? "Quick Share CLI is not installed"
+        : (radioReason !== "" ? "Quick Share cannot run: " + radioReason : "Quick Share is unavailable")
   }
 
-  // Inert: no scan is ever launched, so the pane's "Searching…" state cannot be
-  // entered and the six-second scanner process never exists to be waited on.
-  // `scanning` stays false, which is also what stops the rescan row from
-  // rendering itself as disabled for a search that is not happening.
   function scan() {
-    // if (!available || scanner.running) return
-    // scanning = true
-    // errorText = ""
-    // statusText = "Searching…"
-    // scanner.launched = false
-    // scanner.running = true
+    if (!available || scanner.running) return
+    scanning = true
+    errorText = ""
+    statusText = "Searching…"
+    scanner.launched = false
+    scanner.running = true
   }
 
   function noteDevices(payload) {
@@ -118,34 +109,27 @@ Item {
     devices = next
   }
 
-  // Inert: the device list is always empty because nothing scans, so there is
-  // no index to select and the "target" view this used to open is unreachable
-  // from the pane. Panel.qml still calls it by name from its device rows.
   function chooseDevice(index) {
-    // if (index < 0 || index >= devices.length) return
-    // selectedDevice = devices[index]
-    // viewState = "target"
-    // cursorRequested(0)
+    if (index < 0 || index >= devices.length) return
+    selectedDevice = devices[index]
+    viewState = "target"
+    cursorRequested(0)
   }
   function clearTarget() { viewState = "nearby"; selectedDevice = null; cursorRequested(0) }
 
-  // Inert: a send needs a selected device and there is no way to select one
-  // while the scanner is off, so this is the last gate rather than the first.
-  // It still declares the parameter the panel passes, because the chooser's
-  // onExited calls it by name.
   function sendFiles(paths) {
-    // if (!available || !selectedDevice || sender.running) return
-    // if (!paths || !paths.length) return
-    // pendingPaths = paths
-    // progress = 0
-    // transferPin = ""
-    // transferName = paths.length === 1 ? String(paths[0]).split("/").pop() : paths.length + " files"
-    // transferPeer = selectedDevice.alias
-    // errorText = ""
-    // statusText = "Connecting…"
-    // viewState = "sending"
-    // sender.launched = false
-    // sender.running = true
+    if (!available || !selectedDevice || sender.running) return
+    if (!paths || !paths.length) return
+    pendingPaths = paths
+    progress = 0
+    transferPin = ""
+    transferName = paths.length === 1 ? String(paths[0]).split("/").pop() : paths.length + " files"
+    transferPeer = selectedDevice.alias
+    errorText = ""
+    statusText = "Connecting…"
+    viewState = "sending"
+    sender.launched = false
+    sender.running = true
   }
 
   // Everything `qs` says about a transfer goes to stderr as prose, so this is
@@ -185,10 +169,7 @@ Item {
     statusText = errorText
   }
 
-  // Inert: no transfer can be in flight, so there is no signal to deliver.
-  function cancelSend() {
-    // if (sender.running) sender.signal(2)
-  }
+  function cancelSend() { if (sender.running) sender.signal(2) }
   function finishTerminal() {
     viewState = "nearby"
     errorText = ""
@@ -217,31 +198,6 @@ Item {
   property bool tearingDown: false
   Component.onDestruction: tearingDown = true
 
-  // -------------------------------------------------------------------------
-  // Quick Share is DISABLED ON THIS MACHINE. The three Process blocks below
-  // are kept, commented out rather than deleted, because what is missing is a
-  // property of the hardware, not of this plugin: this box's Wi-Fi chip has no
-  // radio that can carry the direct device-to-device transport rqs_lib needs,
-  // so `qs devices` would find no phone to list and `qs send` no phone it
-  // could reach. Running them anyway buys a six-second subprocess per scan to
-  // learn what is already known here, and a send that waits on a connection
-  // the radio cannot hold.
-  //
-  // Restoring it: uncomment the three blocks and the Component.onCompleted
-  // line under them. Nothing else has to change -- not Service.qml, which
-  // still calls refreshDependencies() and scan() by name, and not Panel.qml,
-  // which reads the same properties it always did. The Quickshell imports at
-  // the top stay for the same reason: with the blocks commented out nothing
-  // left in here uses them, and qmllint reports that as an unused-import Info
-  // -- this note is why, and deleting them is not the fix.
-  //
-  // While this is in force `available` stays false and `depsChecked` true
-  // (declared above), so the pane renders its SETUP branch -- including the
-  // install prompt, which is now advice that cannot help -- and no entry point
-  // above spawns anything.
-  // -------------------------------------------------------------------------
-
-  /* --- commented out on this machine: the dependency probe ---
   Process {
     id: depsProbe
     readonly property var owner: root
@@ -253,9 +209,7 @@ Item {
       owner.noteDependencies(String(depsOutput.text || ""))
     }
   }
-  */
 
-  /* --- commented out on this machine: the device scan ---
   Process {
     id: scanner
     readonly property var owner: root
@@ -282,10 +236,6 @@ Item {
       owner.noteScanFinished(code, String(scanOutput.text || ""))
     }
   }
-  */
-
-  // Reachable only from the commented-out handlers above, kept so that
-  // restoring the blocks restores a whole engine rather than half of one.
   function noteScannerNeverLaunched() {
     scanning = false
     available = false
@@ -302,7 +252,6 @@ Item {
     statusText = errorText
   }
 
-  /* --- commented out on this machine: the file send ---
   Process {
     id: sender
     readonly property var owner: root
@@ -338,15 +287,10 @@ Item {
       owner.finishSend(code)
     }
   }
-  */
-
   function noteSenderNeverLaunched() {
     pendingPaths = []
     failWith("The Quick Share CLI is not installed.")
   }
 
-  // Nothing is probed at construction any more: the probe is commented out
-  // with the three Process blocks above. Uncomment this line and those blocks
-  // together to restore Quick Share.
-  // Component.onCompleted: refreshDependencies()
+  Component.onCompleted: refreshDependencies()
 }

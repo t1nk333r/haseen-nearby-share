@@ -80,6 +80,8 @@ function makeContext(initial = {}) {
     available: false,
     depsChecked: false,
     missingDeps: [],
+    radioReady: false,
+    radioReason: "",
     cursorRequested: () => {},
     ...initial,
   }
@@ -228,14 +230,30 @@ function makeContext(initial = {}) {
   const healthy = makeContext()
   healthy.noteDependencies(JSON.stringify({
     deps: [{id: "cargo", present: true}, {id: "qs", present: true}],
+    radio: {ready: true, reason: ""},
   }))
   assert.equal(healthy.available, true)
   assert.equal(healthy.depsChecked, true)
   assert.equal(healthy.missingDeps.length, 0)
+  assert.equal(healthy.radioReady, true)
+
+  // The conjunction this plugin actually gates on. Every dependency present
+  // with the radio down is the ordinary desktop here, and it has to read as
+  // unavailable, with the probe's own sentence -- not as an install prompt.
+  const radioDown = makeContext()
+  radioDown.noteDependencies(JSON.stringify({
+    deps: [{id: "cargo", present: true}, {id: "qs", present: true}],
+    radio: {ready: false, reason: "the Wi-Fi radio (wlp11s0) is down"},
+  }))
+  assert.equal(radioDown.available, false, "deps installed is not enough on its own")
+  assert.equal(radioDown.missingDeps.length, 0)
+  assert.equal(radioDown.radioReady, false)
+  assert.match(radioDown.statusText, /wlp11s0\) is down/)
 
   const missing = makeContext({ viewState: "nearby" })
   missing.noteDependencies(JSON.stringify({
     deps: [{id: "cargo", present: true}, {id: "qs", present: false}],
+    radio: {ready: true, reason: ""},
   }))
   assert.equal(missing.available, false)
   assert.equal(Array.from(missing.missingDeps).join(","), "qs")

@@ -53,10 +53,9 @@ Panel {
   readonly property string qsTransferPeer: qs ? qs.transferPeer : ""
   readonly property string qsTransferPin: qs ? qs.transferPin : ""
   readonly property var qsMissingDeps: qs ? qs.missingDeps : []
-  // True when the engine is not merely missing its helper but switched off for
-  // this machine's hardware: the pane explains that instead of offering an
-  // install that cannot turn it on.
-  readonly property bool qsMachineDisabled: qs ? qs.disabledOnThisMachine : false
+  // The radio's own sentence, when it has one: a machine can have every
+  // dependency and still not run this, and the pane names which case it is.
+  readonly property string qsRadioReason: qs && qs.radioReason ? qs.radioReason : ""
 
   // The engine resolves the plugin directory from its own manifest metadata,
   // which is the only place that knows where an installed copy actually is.
@@ -260,25 +259,25 @@ Panel {
       if (dy !== 0) selectedIndex = Math.max(0, Math.min(4, selectedIndex + dy))
       return
     }
-    // The protocol switcher's row is gone with Quick Share (its Row is
-    // commented out in the pane above), so nothing flips panes from the
-    // cursor any more and the Quick Share pane's own controls start at 0.
-    // if (selectedIndex === -2 && dx !== 0) {
-    //   setMode(dx > 0 ? "quickshare" : "localsend")
-    //   return
-    // }
+    // The switcher's row (-2) is only a stop while the switcher is drawn: with
+    // the engine unavailable -- no CLI, or the radio down -- the pane has
+    // nothing to switch to, so -2 becomes a gap the walk steps over and the
+    // Quick Share pane's own rows start at 0.
+    if (qsAvailable && selectedIndex === -2 && dx !== 0) {
+      setMode(dx > 0 ? "quickshare" : "localsend")
+      return
+    }
     if (quickShareMode) {
+      var qsFloor = qsAvailable ? -2 : 0
       if (qsViewState === "target") {
-        if (dy !== 0) selectedIndex = Math.max(0, Math.min(2, selectedIndex + dy))
+        if (dy !== 0) selectedIndex = Math.max(qsFloor, Math.min(2, selectedIndex + dy))
         return
       }
       if (qsViewState === "sending" || qsViewState === "success" || qsViewState === "error") {
-        // Only the one action row is left in these states, so anything the
-        // walk reaches lands on it.
-        if (dy !== 0) selectedIndex = 0
+        if (dy !== 0) selectedIndex = Math.max(qsFloor, Math.min(0, selectedIndex + dy))
         return
       }
-      if (dy !== 0) selectedIndex = Math.max(0, Math.min(qsLastIndex, selectedIndex + dy))
+      if (dy !== 0) selectedIndex = Math.max(qsFloor, Math.min(qsLastIndex, selectedIndex + dy))
       return
     }
     if (viewState === "nearby") {
@@ -298,12 +297,11 @@ Panel {
         return
       }
       if (dy !== 0) {
-        // -2 was the protocol switcher. It is gone with Quick Share, and the
-        // controls keep their numbers (-3 the name cog, -1 the receiver
-        // switch), so the walk steps over the gap rather than stopping on a
-        // row that no longer draws.
+        // -2 is the switcher's row. While the engine is unavailable the
+        // switcher is not drawn, so the walk carries past the gap instead of
+        // stopping on a row with nothing in it.
         var nextRow = selectedIndex + dy
-        if (nextRow === -2) nextRow += dy > 0 ? 1 : -1
+        if (!qsAvailable && nextRow === -2) nextRow += dy > 0 ? 1 : -1
         selectedIndex = Math.max(-3, Math.min(lastNearbyIndex, nextRow))
       }
       return
@@ -328,9 +326,7 @@ Panel {
       else closeDeviceName()
       return
     }
-    // The switcher row (-2) is commented out with the switcher itself, so no
-    // row changes protocol any more.
-    // if (selectedIndex === -2) { setMode(quickShareMode ? "localsend" : "quickshare"); return }
+    if (qsAvailable && selectedIndex === -2) { setMode(quickShareMode ? "localsend" : "quickshare"); return }
     if (quickShareMode) {
       if (qsViewState === "target") {
         if (selectedIndex === 0) qsSelectFiles()
@@ -339,10 +335,9 @@ Panel {
       }
       if (qsViewState === "sending") { qsCancel(); return }
       if (qsViewState === "success" || qsViewState === "error") { qsFinish(); return }
-      // There is nothing to build when the engine is off for this machine's
-      // chip, so the row cannot fire the installer; the pane's own text says
-      // why. A machine that is merely missing the helper still gets the build.
-      if (!qsAvailable) { if (!root.qsMachineDisabled) installDependencies(); return }
+      // Only a missing helper is worth an install; a radio that is down is not
+      // something the installer can fix, and the pane's text says so.
+      if (!qsAvailable) { if (qsMissingDeps.length > 0) installDependencies(); return }
       if (selectedIndex >= 0 && selectedIndex < qsDevices.length) qsChooseDevice(selectedIndex)
       else if (selectedIndex === qsDevices.length) qsScan()
       return
@@ -496,24 +491,18 @@ Panel {
           }
           }
         }
-        PanelSeparator { width: parent.width }
+        PanelSeparator { visible: root.qsAvailable; width: parent.width }
 
-        /* --- commented out on this machine: the protocol switcher ---
-        Quick Share's engine is off for this box's Wi-Fi chip (see
-        QuickShare.qml). The control that switches to its pane goes with it: a
-        switcher that leads to a pane which cannot work is worse than no
-        switcher. Restore it in the same edit that uncomments the engine.
-
-        Its row keeps the number -2 in the cursor maths above, where the
-        LocalSend walk steps over the gap rather than stopping on a row that no
-        longer draws. LocalSend is the only protocol left, so neither button
-        has anything to switch to.
         // The two protocols, given equal weight. They are genuinely separate
         // stacks -- a different transport, a different device list, a
         // different binary -- so this switches panes rather than filtering one
         // combined list that could never merge cleanly.
         Row {
           id: modeSwitch
+          // Hidden, not removed, when the engine cannot run: a control that
+          // switches to a pane which cannot work is worse than no control, and
+          // this way it returns on its own when the radio does.
+          visible: root.qsAvailable
           width: parent.width; spacing: Style.space(8)
           Button {
             width: (parent.width - parent.spacing) / 2
@@ -540,8 +529,7 @@ Panel {
             onClicked: root.setMode("quickshare")
           }
         }
-        PanelSeparator { width: parent.width }
-        */
+        PanelSeparator { visible: root.qsAvailable; width: parent.width }
 
         Column {
           visible: !root.quickShareMode && root.viewState === "nearby"; width: parent.width; spacing: Style.space(6)
@@ -784,17 +772,17 @@ Panel {
 
           PanelSectionHeader { text: root.qsAvailable ? "DEVICES" : "SETUP"; foreground:root.foreground; fontFamily:root.fontFamily }
 
-          // Explains itself twice over: a missing helper can be built, a
-          // machine that cannot carry the transport cannot. The install action
-          // is only offered in the first case.
+          // Two different not-availables, and the pane says which: a missing
+          // helper can be built, a radio that is down cannot, and only the
+          // first is worth offering an install for.
           Column {
             visible: !root.qsAvailable && root.qsChecked
             width: parent.width; spacing: Style.space(6)
             Text {
               width:parent.width; textFormat:Text.PlainText; wrapMode:Text.Wrap
-              text: root.qsMachineDisabled
-                ? "Quick Share is off on this machine: its direct device-to-device link needs a Wi-Fi radio this box's chip does not have. Nothing is missing and nothing is worth installing — the engine is commented out in the plugin, not deleted."
-                : "Quick Share needs a helper this plugin does not ship. It is built from source on this machine."
+              text: root.qsMissingDeps.length > 0
+                ? "Quick Share needs a helper this plugin does not ship. It is built from source on this machine."
+                : "Quick Share cannot run yet: " + root.qsRadioReason + "."
               color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body
             }
             Text {
@@ -804,7 +792,7 @@ Panel {
               color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.body
             }
             Button {
-              visible: !root.qsMachineDisabled
+              visible: root.qsMissingDeps.length > 0
               width:parent.width; bordered:true; iconText:"󰇚"; text:"Install dependencies"
               tooltipText:"Opens a terminal to install what is missing"
               foreground:root.foreground; fontFamily:root.fontFamily
