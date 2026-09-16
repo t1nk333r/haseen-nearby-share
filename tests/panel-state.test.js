@@ -489,17 +489,20 @@ function callNames(state) {
   state.moveCursor(0, 5)
   assert.equal(state.selectedIndex, 3, "the cursor stops on incoming PIN settings after rescan")
   state.moveCursor(0, -9)
-  // Three controls sit above the device list, and each must be its own stop:
-  // -3 the device-name cog, -2 the protocol switcher, -1 the receiver switch.
-  // The ceiling has moved twice as controls were added, so this walks the whole
-  // run rather than asserting a single index.
+  // Two controls sit above the device list, and each must be its own stop:
+  // -3 the device-name cog, -1 the receiver switch. The gap between them is
+  // the protocol switcher's old row (-2), removed with Quick Share from the
+  // pane and from the walk, which steps over it rather than stopping on a row
+  // that no longer draws.
   assert.equal(state.selectedIndex, -3, "the cursor stops on the device-name cog, the topmost control")
   state.moveCursor(0, 1)
-  assert.equal(state.selectedIndex, -2, "the mode switcher is a stop below the cog")
+  assert.equal(state.selectedIndex, -1, "the receiver switch is the next stop, over the removed switcher row")
   state.moveCursor(0, 1)
-  assert.equal(state.selectedIndex, -1, "the receiver switch stays reachable below the mode switcher")
+  assert.equal(state.selectedIndex, 0, "and the device list follows the receiver switch")
   state.moveCursor(0, -1)
-  assert.equal(state.selectedIndex, -2)
+  assert.equal(state.selectedIndex, -1, "coming back up stops on the receiver switch, not in the gap")
+  state.moveCursor(0, -1)
+  assert.equal(state.selectedIndex, -3, "and carries on to the cog, skipping the gap again")
   state.selectedIndex = 2
   state.moveCursor(1, 0)
   assert.equal(state.selectedIndex, 3, "left and right must navigate the compact Nearby action row")
@@ -697,4 +700,6 @@ console.log("panel state tests passed")
 // copyUpdateCommand) is adopted, but where upstream and the fork genuinely
 // disagree -- the repository URL and the plugin id in the recovery command --
 // the local fork values (t1nk333r/omarchy-nearby-share, t1nk33r.nearby-share)
-// are kept, along with the fork's Quick Share pane and mode-switcher cursor row.
+// are kept, along with the fork's Quick Share pane. Quick Share's engine is
+// commented out on this machine and its switcher row is gone with it, so the
+// cursor run now steps over the -2 gap rather than stopping in it.

@@ -22,7 +22,9 @@ cargo fmt --manifest-path backend/Cargo.toml --all -- --check
 
 ## [SYSTEM_FLOW]
 
-Two protocols behind one bar widget, selected by two buttons at the top of the popup.
+One protocol (LocalSend) behind one bar widget: the second, Quick Share, is
+commented out on this machine together with the two buttons that selected it —
+see the switcher note in `Panel.qml` and the engine note in `QuickShare.qml`.
 
 ```
 Bar (one Panel.qml PER MONITOR — view only, owns nothing singular)
@@ -58,7 +60,8 @@ Invariants that govern every change:
 - **Automatic paths notify; explicit paths act.** No git hook or timer may invoke a
   privileged operation (plan 013).
 - Cursor indices in the LocalSend nearby view run negative: `-3` name cog,
-  `-2` protocol switcher, `-1` receiver toggle, then `0..n` rows. `moveCursor`'s clamp,
+  `-1` receiver toggle, then `0..n` rows. `-2` was the protocol switcher and is
+  gone with it — `moveCursor`'s LocalSend walk steps over the gap — so the clamp,
   `activateCursor`'s branch, and each row's own `hasCursor` must be changed together.
 - **Settings are read from `~/.config/omarchy/shell.json` and written through
   `shell.updateEntryInline`.** `shell` is `services/PluginShellApi.qml`, the whole

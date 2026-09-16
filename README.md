@@ -9,6 +9,11 @@ at the top.
 > Share pane, the mode switcher, dependency installation on pull, and the
 > firewall script. Upstream is kept as a git remote so fixes can be rebased in.
 >
+> On this machine Quick Share itself is commented out, and the switcher that
+> offered its pane is commented out with it: the chip in this box cannot carry
+> the direct device-to-device transport, so the pane could only ever say so.
+> `QuickShare.qml` and `Panel.qml` carry the reason and the restore recipe.
+>
 > Independent project. Not affiliated with or endorsed by LocalSend, Google or
 > Omarchy.
 

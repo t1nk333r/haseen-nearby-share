@@ -260,20 +260,25 @@ Panel {
       if (dy !== 0) selectedIndex = Math.max(0, Math.min(4, selectedIndex + dy))
       return
     }
-    if (selectedIndex === -2 && dx !== 0) {
-      setMode(dx > 0 ? "quickshare" : "localsend")
-      return
-    }
+    // The protocol switcher's row is gone with Quick Share (its Row is
+    // commented out in the pane above), so nothing flips panes from the
+    // cursor any more and the Quick Share pane's own controls start at 0.
+    // if (selectedIndex === -2 && dx !== 0) {
+    //   setMode(dx > 0 ? "quickshare" : "localsend")
+    //   return
+    // }
     if (quickShareMode) {
       if (qsViewState === "target") {
-        if (dy !== 0) selectedIndex = Math.max(-2, Math.min(2, selectedIndex + dy))
+        if (dy !== 0) selectedIndex = Math.max(0, Math.min(2, selectedIndex + dy))
         return
       }
       if (qsViewState === "sending" || qsViewState === "success" || qsViewState === "error") {
-        if (dy !== 0) selectedIndex = Math.max(-2, Math.min(0, selectedIndex + dy))
+        // Only the one action row is left in these states, so anything the
+        // walk reaches lands on it.
+        if (dy !== 0) selectedIndex = 0
         return
       }
-      if (dy !== 0) selectedIndex = Math.max(-2, Math.min(qsLastIndex, selectedIndex + dy))
+      if (dy !== 0) selectedIndex = Math.max(0, Math.min(qsLastIndex, selectedIndex + dy))
       return
     }
     if (viewState === "nearby") {
@@ -292,7 +297,15 @@ Panel {
         selectedIndex = Math.max(devices.length, Math.min(lastNearbyIndex, selectedIndex + dx))
         return
       }
-      if (dy !== 0) selectedIndex = Math.max(-3, Math.min(lastNearbyIndex, selectedIndex + dy))
+      if (dy !== 0) {
+        // -2 was the protocol switcher. It is gone with Quick Share, and the
+        // controls keep their numbers (-3 the name cog, -1 the receiver
+        // switch), so the walk steps over the gap rather than stopping on a
+        // row that no longer draws.
+        var nextRow = selectedIndex + dy
+        if (nextRow === -2) nextRow += dy > 0 ? 1 : -1
+        selectedIndex = Math.max(-3, Math.min(lastNearbyIndex, nextRow))
+      }
       return
     }
     if (dx !== 0 && (viewState === "incoming" || viewState === "text" || viewState === "incoming_pin_disable")) {
@@ -315,7 +328,9 @@ Panel {
       else closeDeviceName()
       return
     }
-    if (selectedIndex === -2) { setMode(quickShareMode ? "localsend" : "quickshare"); return }
+    // The switcher row (-2) is commented out with the switcher itself, so no
+    // row changes protocol any more.
+    // if (selectedIndex === -2) { setMode(quickShareMode ? "localsend" : "quickshare"); return }
     if (quickShareMode) {
       if (qsViewState === "target") {
         if (selectedIndex === 0) qsSelectFiles()
@@ -483,6 +498,16 @@ Panel {
         }
         PanelSeparator { width: parent.width }
 
+        /* --- commented out on this machine: the protocol switcher ---
+        Quick Share's engine is off for this box's Wi-Fi chip (see
+        QuickShare.qml). The control that switches to its pane goes with it: a
+        switcher that leads to a pane which cannot work is worse than no
+        switcher. Restore it in the same edit that uncomments the engine.
+
+        Its row keeps the number -2 in the cursor maths above, where the
+        LocalSend walk steps over the gap rather than stopping on a row that no
+        longer draws. LocalSend is the only protocol left, so neither button
+        has anything to switch to.
         // The two protocols, given equal weight. They are genuinely separate
         // stacks -- a different transport, a different device list, a
         // different binary -- so this switches panes rather than filtering one
@@ -516,6 +541,7 @@ Panel {
           }
         }
         PanelSeparator { width: parent.width }
+        */
 
         Column {
           visible: !root.quickShareMode && root.viewState === "nearby"; width: parent.width; spacing: Style.space(6)
