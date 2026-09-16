@@ -39,11 +39,16 @@ readonly QS_BIN="${plugin_dir}/bin/nearby-qs"
 # scope is what the dependency blocks, so the panel can say "Quick Share needs
 # this" rather than reporting one undifferentiated pile. `core` breaks both
 # panes; `quickshare` breaks only the Quick Share pane.
+#
+# `iw` is listed because the radio probe below reads it, not because the CLI
+# calls it: without the row, a machine missing `iw` would be told its driver has
+# no Wi-Fi Direct and offered nothing to install, when the fix is a package.
 deps() {
   cat <<'TABLE'
 wl-clipboard|Clipboard access|wl-copy|wl-clipboard|core
 libnotify|Desktop notifications|notify-send|libnotify|core
 bluez|Bluetooth stack|bluetoothctl|bluez bluez-utils|quickshare
+iw|Wi-Fi Direct tooling|iw|iw|quickshare
 protobuf|Protocol buffer compiler|protoc|protobuf|quickshare-build
 pkgconf|Build configuration|pkgconf|pkgconf|quickshare-build
 cc|C toolchain|cc|base-devel|quickshare-build
@@ -83,6 +88,19 @@ missing_ids() {
 #
 # `ready` is the whole verdict; `reason` is the sentence the pane shows. It is
 # written here rather than in QML so both halves of the plugin word it the same.
+#
+# The two values that reach this JSON from outside -- the interface name and the
+# sentence built from it -- go through json_str. An interface name is
+# kernel-constrained and cannot hold a quote or a backslash, but the cost of
+# being wrong is a pane that renders nothing at all, and one parameter expansion
+# is cheaper than that bet.
+json_str() {
+  local text=$1
+  text=${text//\\/\\\\}
+  text=${text//\"/\\\"}
+  printf '%s' "$text"
+}
+
 radio_json() {
   local bt_present=false bt_powered=false
   local wifi_iface="" wifi_up=false wifi_connected=false wifi_p2p=false
@@ -95,7 +113,7 @@ radio_json() {
     [[ $bt_show == *"Powered: yes"* ]] && bt_powered=true
   fi
 
-  local entry iface
+  local entry iface=""
   for entry in /sys/class/net/wl*; do
     [[ -e $entry ]] || continue
     iface="${entry##*/}"
@@ -125,16 +143,27 @@ radio_json() {
   fi
 
   # The first failing condition, in the order a person would check them.
+  #
+  # Each of the two tools that is not on every machine is tested immediately
+  # before the reading it produces, so its absence is never reported as the
+  # hardware verdict it mimics: with no bluetoothctl, `bt_powered` stays false
+  # and reads as "the adapter is powered off"; with no iw, `wifi_p2p` stays
+  # false and reads as "the driver does not support Wi-Fi Direct". A sysfs fact
+  # (adapter present, interface present, radio administratively up) still comes
+  # first -- it is true regardless of what is installed, and it is the answer a
+  # machine with no Wi-Fi hardware needs.
   if   [[ $bt_present == false ]]; then reason="no Bluetooth adapter is present"
+  elif ! have bluetoothctl;      then reason="bluetoothctl is not installed"
   elif [[ $bt_powered == false ]]; then reason="the Bluetooth adapter is powered off"
   elif [[ -z $wifi_iface ]];     then reason="this machine has no Wi-Fi interface"
   elif [[ $wifi_up == false ]];  then reason="the Wi-Fi radio ($wifi_iface) is down"
+  elif ! have iw;                then reason="iw is not installed"
   elif [[ $wifi_p2p == false ]]; then reason="the Wi-Fi driver ($wifi_iface) does not support Wi-Fi Direct"
   fi
 
   printf '"radio":{"bluetooth":{"present":%s,"powered":%s},"wifi":{"iface":"%s","up":%s,"connected":%s,"p2p":%s},"ready":%s,"reason":"%s"}' \
-    "$bt_present" "$bt_powered" "$wifi_iface" "$wifi_up" "$wifi_connected" "$wifi_p2p" \
-    "$([[ -z $reason ]] && echo true || echo false)" "$reason"
+    "$bt_present" "$bt_powered" "$(json_str "$wifi_iface")" "$wifi_up" "$wifi_connected" "$wifi_p2p" \
+    "$([[ -z $reason ]] && echo true || echo false)" "$(json_str "$reason")"
 }
 
 emit_json() {
@@ -165,15 +194,29 @@ install_missing() {
   fi
 
   # Collect pacman packages for everything missing except qs, which cargo owns.
-  local id label probe pkgs scope
+  #
+  # The accumulation is inside the `while`, not after it: `read` assigns every
+  # variable it names on every call, including the one that hits EOF, and it
+  # clears them there. Reading the table after the loop therefore read the empty
+  # string, matched nothing against the `-` sentinel, added no package, and made
+  # this script's headline `--install` path a silent no-op for every input.
+  #
+  # The table is matched in shell rather than through an `awk` filter, which is
+  # what it used to be: that program's last field carried an unbalanced quote
+  # ("$5""), so it was a syntax error on every awk, printed nothing, and left
+  # the list empty even once the accumulation was moved into the loop. A second
+  # language embedded in single quotes is not worth the parse.
+  local id tid label probe pkgs scope
   local -a pac=()
   local want_qs=0
   for id in "${missing[@]}"; do
     if [[ $id == qs ]]; then want_qs=1; continue; fi
-    while IFS='|' read -r label probe pkgs scope; do :; done < <(
-      deps | awk -F'|' -v id="$id" '$1==id {print $2"|"$3"|"$4"|"$5}'
-    )
-    [[ $pkgs == "-" ]] || pac+=($pkgs)
+    while IFS='|' read -r tid label probe pkgs scope; do
+      [[ $tid == "$id" ]] || continue
+      # Unquoted on purpose: the table's package field holds space-separated
+      # names ("bluez bluez-utils"), and pacman wants them as separate words.
+      [[ $pkgs == "-" ]] || pac+=($pkgs)
+    done < <(deps)
   done
 
   cat <<EOF

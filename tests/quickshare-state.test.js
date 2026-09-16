@@ -22,7 +22,11 @@ const vm = require("node:vm")
 
 const source = fs.readFileSync(require.resolve("../QuickShare.qml"), "utf8")
 
-const FUNCTIONS = ["noteSendLine", "finishSend", "noteDevices", "noteDependencies"]
+// `unavailableStatus` is extracted with the rest because noteDependencies and
+// finishTerminal both word their verdict through it: leaving it out would make
+// either one throw inside the context rather than assert anything.
+const FUNCTIONS = ["noteSendLine", "finishSend", "noteDevices", "noteDependencies",
+  "unavailableStatus", "finishTerminal"]
 
 function extractFunction(name) {
   const marker = `function ${name}`
@@ -266,6 +270,38 @@ function makeContext(initial = {}) {
   unparseable.noteDependencies("not json")
   assert.equal(unparseable.depsChecked, true)
   assert.equal(Array.from(unparseable.missingDeps).join(","), "qs", "a failed probe keeps the old verdict")
+}
+
+// ------------------------------------------------------------ finishTerminal
+{
+  // Leaving a finished transfer goes back through the same sentence the probe
+  // writes. It used to hard-code "Quick Share CLI is not installed", which is
+  // false on the ordinary machine here -- CLI built, radio down -- and points
+  // the user at an installer for a package they already have.
+  const radioDown = makeContext({
+    available: false, missingDeps: [], radioReason: "the Wi-Fi radio (wlp11s0) is down",
+  })
+  radioDown.finishTerminal()
+  assert.match(radioDown.statusText, /the Wi-Fi radio \(wlp11s0\) is down/,
+    "a radio that is down is named as such, not as a missing CLI")
+  assert.equal(radioDown.viewState, "nearby")
+  assert.equal(radioDown.errorText, "")
+  assert.equal(radioDown.selectedDevice, null, "leaving a transfer drops the target")
+
+  const cliMissing = makeContext({ available: false, missingDeps: ["qs"], radioReason: "" })
+  cliMissing.finishTerminal()
+  assert.match(cliMissing.statusText, /CLI is not installed/,
+    "the CLI really missing is still the CLI message")
+
+  const idle = makeContext({ available: true, missingDeps: [], radioReason: "" })
+  idle.finishTerminal()
+  assert.equal(idle.statusText, "Quick Share is idle")
+
+  // Characterised: the probe reports ready=false with an empty sentence when it
+  // has no radio to describe at all, and the pane still needs a sentence.
+  const mute = makeContext({ available: false, missingDeps: [], radioReason: "" })
+  mute.finishTerminal()
+  assert.equal(mute.statusText, "Quick Share is unavailable")
 }
 
 console.log("quickshare state tests passed")

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **The Quick Share pane can no longer trap the popup.** The mode switcher is
+  hidden while the engine cannot run, and only the Quick Share pane's columns
+  are drawn in that state, so a machine whose Wi-Fi radio is down — or whose CLI
+  was never built — had no way back to LocalSend. The pane now falls back to
+  LocalSend whenever the engine reports that it cannot run and returns to Quick
+  Share as soon as it can, and the report is re-read on every popup open rather
+  than only while the Quick Share pane is showing, so neither direction needs a
+  shell restart. The Quick Share target pane's cursor no longer stops on a row
+  past its last one.
+- **The dependency report names the tool that is missing.** `iw` and
+  `bluetoothctl` drive the radio probe and are now reported as their own case —
+  `iw` is listed in the table, so `--install` offers it — instead of a missing
+  `iw` being read as a driver without Wi-Fi Direct and a missing `bluetoothctl`
+  as an adapter that is switched off. The interface name and the reason sentence
+  are escaped before they reach the JSON.
+- **`dependencies.sh --install` installs packages again.** Two faults left the
+  pacman list empty: the table lookup read its variables after the loop, where
+  `read` has already cleared them, and the `awk` filter it piped through had an
+  unbalanced quote, so it never matched a row. A radio probe that finds no Wi-Fi
+  interface also no longer aborts the whole report under `set -u`.
+- **A firewall rule that fails is no longer reported as success.**
+  `scripts/setup_firewall.sh` runs each applier as an `if` condition, where bash
+  suspends `set -e`, so a failing `ufw allow` fell through to `ufw reload` and
+  the caller printed "applied successfully"; every command is now checked and
+  the one that failed is named.
+- `tests/all.sh` runs `tests/quickshare-state.test.js`, which CI has run since
+  it landed. The sender argv passes `--to` before `--`, so a selected path
+  cannot be read as a flag.
 - **Quick Share can be told to receive.** `patches/qs-events.patch` adds
   `--events` to `qs receive`: one JSON object per line on stdout (`ready`,
   `request`, `progress`, `done`, `failed`) and `accept`/`decline` on stdin, with

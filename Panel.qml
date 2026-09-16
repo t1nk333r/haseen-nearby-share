@@ -32,10 +32,13 @@ Panel {
 
   // Engine state, read under the names the popup already used. A view with no
   // engine says so rather than rendering an empty panel.
-  // Which pane the two buttons select. The engine owns it so every monitor's
-  // popup shows the same one and it survives a restart.
-  readonly property string mode: engine ? engine.mode : "localsend"
-  readonly property bool quickShareMode: mode === "quickshare"
+  // Which pane is drawn. The engine owns the answer, and it is not simply the
+  // stored preference: when the CLI is missing or the radio is down the engine
+  // falls the pane back to LocalSend, because the switcher is hidden in that
+  // state and the Quick Share pane has nothing to show and no way out of itself.
+  // Asking the engine rather than recomputing it here keeps one verdict in one
+  // place; with no engine at all, LocalSend is the pane that always works.
+  readonly property bool quickShareMode: engine ? engine.quickShareMode : false
   readonly property var qs: engine ? engine.quickshare : null
 
   // The Quick Share pane's own state, read under names that parallel the
@@ -62,6 +65,11 @@ Panel {
   readonly property string qsScriptDir: (engine && engine.pluginDir
     ? engine.pluginDir
     : (Quickshell.env("HOME") || "") + "/.config/omarchy/plugins/" + manifestPluginId) + "/scripts"
+  // That directory is interpolated into a `bash -c` string between single
+  // quotes, so a quote anywhere in it would end the quoted region early and the
+  // rest of the path would be read as commands. '\'' is the only escape a
+  // single-quoted string has: close it, escape the quote, reopen it.
+  readonly property string qsScriptDirQuoted: qsScriptDir.replace(/'/g, "'\\''")
 
   // Last reachable cursor row in the Quick Share pane. Index -2 is the mode
   // switcher in both panes; dx there flips protocol rather than moving,
@@ -270,7 +278,10 @@ Panel {
     if (quickShareMode) {
       var qsFloor = qsAvailable ? -2 : 0
       if (qsViewState === "target") {
-        if (dy !== 0) selectedIndex = Math.max(qsFloor, Math.min(2, selectedIndex + dy))
+        // 0 Send files, 1 Back. The ceiling was 2, one past the last row the
+        // pane draws, so the walk stopped on a row that is not there and Enter
+        // on it performed Back a second time.
+        if (dy !== 0) selectedIndex = Math.max(qsFloor, Math.min(1, selectedIndex + dy))
         return
       }
       if (qsViewState === "sending" || qsViewState === "success" || qsViewState === "error") {
@@ -782,7 +793,9 @@ Panel {
               width:parent.width; textFormat:Text.PlainText; wrapMode:Text.Wrap
               text: root.qsMissingDeps.length > 0
                 ? "Quick Share needs a helper this plugin does not ship. It is built from source on this machine."
-                : "Quick Share cannot run yet: " + root.qsRadioReason + "."
+                : (root.qsRadioReason !== ""
+                  ? "Quick Share cannot run yet: " + root.qsRadioReason + "."
+                  : "Quick Share cannot run yet on this machine.")
               color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body
             }
             Text {
@@ -973,7 +986,7 @@ Panel {
   // Neither script is ever run with elevated privileges from here.
   Process {
     id: depsInstaller
-    command: ["bash","-c","if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then omarchy-launch-floating-terminal-with-presentation \"bash '" + root.qsScriptDir + "/dependencies.sh' --install\"; else xdg-terminal-exec bash '" + root.qsScriptDir + "/dependencies.sh' --install; fi"]
+    command: ["bash","-c","if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then omarchy-launch-floating-terminal-with-presentation \"bash '" + root.qsScriptDirQuoted + "/dependencies.sh' --install\"; else xdg-terminal-exec bash '" + root.qsScriptDirQuoted + "/dependencies.sh' --install; fi"]
     running: false
     // The installer runs detached in its own terminal, so this exit says the
     // launcher returned, not that anything was installed. Re-probing is what
@@ -982,7 +995,7 @@ Panel {
   }
   Process {
     id: firewallSetup
-    command: ["bash","-c","if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then omarchy-launch-floating-terminal-with-presentation \"bash '" + root.qsScriptDir + "/setup_firewall.sh'\"; else xdg-terminal-exec bash '" + root.qsScriptDir + "/setup_firewall.sh'; fi"]
+    command: ["bash","-c","if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then omarchy-launch-floating-terminal-with-presentation \"bash '" + root.qsScriptDirQuoted + "/setup_firewall.sh'\"; else xdg-terminal-exec bash '" + root.qsScriptDirQuoted + "/setup_firewall.sh'; fi"]
     running: false
   }
   // Polls only while the popup is open and only after an install was started,

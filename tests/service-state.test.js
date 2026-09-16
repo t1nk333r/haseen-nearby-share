@@ -289,6 +289,7 @@ function engine(initial = {}) {
   context.cursors = cursors
   context.notified = notified
   context.signals = signals
+  context.quickShareCalls = quickShareCalls
   return context
 }
 
@@ -835,6 +836,36 @@ for (const busy of ["sending", "receiving", "pin"]) {
     "one monitor closing must not stop discovery while another popup is open")
   state.viewClosed()
   assert.equal(state.discoveryActive, false)
+}
+
+{
+  // Every open re-reads the Quick Share report, whatever pane is showing. The
+  // probe used to sit inside the Quick Share branch, which is only reached once
+  // the engine can already run -- so on the machine that needed it most (CLI
+  // built, radio down, pane fallen back to LocalSend) nothing ever re-read the
+  // radio, and the pane could only come back after a shell restart.
+  const state = engine({openViewCount: 0, viewState: "nearby", discoveryActive: false})
+  state.viewOpened()
+  assert.deepEqual(state.quickShareCalls, ["refreshDependencies"],
+    "opening a popup probes the Quick Share engine even from the LocalSend pane")
+  state.viewOpened()
+  assert.deepEqual(state.quickShareCalls, ["refreshDependencies"],
+    "one probe per open, not one per monitor")
+}
+
+{
+  // The pane falls back to LocalSend while the engine cannot run. The switcher
+  // is hidden in that state -- there is nothing to switch to -- so honouring the
+  // stored preference left the popup showing a pane that could do nothing and
+  // offered no way back to the one that could.
+  const pane = (mode, depsChecked, available) => vm.runInNewContext(
+    `(${extractBinding("quickShareMode")})`, {mode, quickShareEngine: {depsChecked, available}})
+  assert.equal(pane("quickshare", true, false), false,
+    "an engine that cannot run hands the pane back to LocalSend")
+  assert.equal(pane("quickshare", true, true), true, "and Quick Share returns the moment it can")
+  assert.equal(pane("localsend", true, true), false, "the stored preference still wins the other way")
+  assert.equal(pane("quickshare", false, false), true,
+    "before the first report the pane stays put rather than flashing LocalSend for one probe")
 }
 
 {

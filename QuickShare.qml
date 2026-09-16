@@ -61,6 +61,16 @@ Item {
 
   function refreshDependencies() { if (!depsProbe.running) depsProbe.running = true }
 
+  // One sentence for "this engine cannot run", used by the probe handler and by
+  // the exit from a finished transfer both. A missing CLI and a radio that is
+  // down are different faults with different fixes, and the second one used to
+  // be reported as the first: after a transfer ended on a machine whose Wi-Fi
+  // had gone down, the pane claimed the CLI was not installed.
+  function unavailableStatus() {
+    if (missingDeps.indexOf("qs") >= 0) return "Quick Share CLI is not installed"
+    return radioReason !== "" ? "Quick Share cannot run: " + radioReason : "Quick Share is unavailable"
+  }
+
   function noteDependencies(payload) {
     var parsed = null
     try { parsed = JSON.parse(payload) } catch (e) { parsed = null }
@@ -78,10 +88,7 @@ Item {
     radioReason = radio && radio.reason ? String(radio.reason) : ""
     available = missing.indexOf("qs") < 0 && radioReady
     depsChecked = true
-    if (!available && viewState === "nearby")
-      statusText = missing.indexOf("qs") >= 0
-        ? "Quick Share CLI is not installed"
-        : (radioReason !== "" ? "Quick Share cannot run: " + radioReason : "Quick Share is unavailable")
+    if (!available && viewState === "nearby") statusText = unavailableStatus()
   }
 
   function scan() {
@@ -173,7 +180,7 @@ Item {
   function finishTerminal() {
     viewState = "nearby"
     errorText = ""
-    statusText = available ? "Quick Share is idle" : "Quick Share CLI is not installed"
+    statusText = available ? "Quick Share is idle" : unavailableStatus()
     selectedDevice = null
     progress = 0
     cursorRequested(0)
@@ -259,13 +266,21 @@ Item {
     // --to is mandatory off a TTY, and `qs` exits 2 rather than prompting if
     // it is missing. The device id is passed rather than the name: a name
     // match is a substring search and two phones can share one.
+    //
+    // The option goes before the paths and `--` ends the option list, so a
+    // selected path is never read as a flag -- checked against the pinned
+    // binary: `send -weird-file ...` is rejected as an unknown argument, the
+    // same path after `--` is taken as a file. The order is not free: clap
+    // treats everything after `--` as a positional, so putting `--to` there
+    // would send the device id as a file name and fail with "not a TTY".
     command: {
       var argv = [root.binary, "--port", String(root.port)]
       if (root.advertisedName !== "") { argv.push("--name"); argv.push(root.advertisedName) }
       argv.push("send")
-      for (var i = 0; i < root.pendingPaths.length; i++) argv.push(String(root.pendingPaths[i]))
       argv.push("--to")
       argv.push(root.selectedDevice ? String(root.selectedDevice.id) : "")
+      argv.push("--")
+      for (var i = 0; i < root.pendingPaths.length; i++) argv.push(String(root.pendingPaths[i]))
       return argv
     }
     running: false

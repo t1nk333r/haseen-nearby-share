@@ -88,14 +88,16 @@ Everything except the Rust toolchain is usually already present on Omarchy:
 
 ```sh
 sudo pacman -S --needed rustup protobuf base-devel pkgconf dbus \
-                        bluez bluez-libs bluez-utils wl-clipboard libnotify
+                        bluez bluez-libs bluez-utils iw wl-clipboard libnotify
 rustup default stable
 ```
 
 `protobuf` is needed because `rqs_lib`'s `build.rs` compiles its `.proto` files
 at build time. `bluez` is needed because Quick Share discovery uses Bluetooth
-LE. `scripts/dependencies.sh --json` reports what is missing and
-`--install` installs it.
+LE, and `iw` is what the radio probe asks about Wi-Fi Direct: without it the
+probe cannot tell a missing tool from a driver that has no P2P, so it says so
+and `--install` offers the package. `scripts/dependencies.sh --json` reports
+what is missing and `--install` installs it.
 
 `qs` is built from a pinned revision (`QS_REV` in `scripts/dependencies.sh`,
 also written to `bin/nearby-qs.rev` at install time) and with `--locked`, so
