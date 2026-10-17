@@ -152,7 +152,7 @@ function helperDerived(state) {
 
 const functionNames = [
   "viewOpened", "viewClosed", "notificationNeeded",
-  "send", "utf8ByteLength", "bindBackendRunning", "persistSettings", "persistReceiverEnabled", "persistMode",
+  "send", "utf8ByteLength", "bindBackendRunning", "persistSettings", "persistReceiverEnabled",
   "toggleReceiver", "finishReceiverShutdown",
   "persistDeviceName", "chooseNameMode", "submitCustomName", "restartForName",
   "closeDeviceName", "requestCustomNameFocus", "finishNameShutdown",
@@ -172,7 +172,6 @@ function engine(initial = {}) {
   const cursors = []
   const notified = []
   const signals = {pinCleared: 0, pinFocusRequested: 0, incomingPinCleared: 0, incomingPinFocusRequested: 0, focusRestoreRequested: 0}
-  const quickShareCalls = []
   const context = {
     Model,
     Date: {now: () => 1000},
@@ -189,11 +188,6 @@ function engine(initial = {}) {
     incomingPinFocusRequested: () => { signals.incomingPinFocusRequested++ },
     focusRestoreRequested: () => { signals.focusRestoreRequested++ },
     shell: null,
-    // The engine now hosts a second pane. Defaults keep these tests in the
-    // LocalSend pane they were written for, while still running the real
-    // mode-aware code paths rather than a copy of them.
-    quickShareMode: false,
-    mode: "localsend",
     // Device-name state. The ready handler records the fingerprint so a
     // generated name can be seeded from it.
     helperFingerprint: "",
@@ -205,15 +199,6 @@ function engine(initial = {}) {
     nameRestartDeferrals: 0,
     nameShutdownFallback: {restart: () => {}, stop: () => {}},
     nameRestart: {restart: () => {}, stop: () => {}},
-    quickShareEngine: {
-      available: true,
-      depsChecked: true,
-      missingDeps: [],
-      devices: [],
-      viewState: "nearby",
-      scan: () => { quickShareCalls.push("scan") },
-      refreshDependencies: () => { quickShareCalls.push("refreshDependencies") },
-    },
     // The real config-derived properties. `shell` is the third-party surface
     // from services/PluginShellApi.qml: updateEntryInline and no shellConfig.
     manifestPluginId: "t1nk33r.nearby-share",
@@ -289,7 +274,6 @@ function engine(initial = {}) {
   context.cursors = cursors
   context.notified = notified
   context.signals = signals
-  context.quickShareCalls = quickShareCalls
   return context
 }
 
@@ -839,36 +823,6 @@ for (const busy of ["sending", "receiving", "pin"]) {
 }
 
 {
-  // Every open re-reads the Quick Share report, whatever pane is showing. The
-  // probe used to sit inside the Quick Share branch, which is only reached once
-  // the engine can already run -- so on the machine that needed it most (CLI
-  // built, radio down, pane fallen back to LocalSend) nothing ever re-read the
-  // radio, and the pane could only come back after a shell restart.
-  const state = engine({openViewCount: 0, viewState: "nearby", discoveryActive: false})
-  state.viewOpened()
-  assert.deepEqual(state.quickShareCalls, ["refreshDependencies"],
-    "opening a popup probes the Quick Share engine even from the LocalSend pane")
-  state.viewOpened()
-  assert.deepEqual(state.quickShareCalls, ["refreshDependencies"],
-    "one probe per open, not one per monitor")
-}
-
-{
-  // The pane falls back to LocalSend while the engine cannot run. The switcher
-  // is hidden in that state -- there is nothing to switch to -- so honouring the
-  // stored preference left the popup showing a pane that could do nothing and
-  // offered no way back to the one that could.
-  const pane = (mode, depsChecked, available) => vm.runInNewContext(
-    `(${extractBinding("quickShareMode")})`, {mode, quickShareEngine: {depsChecked, available}})
-  assert.equal(pane("quickshare", true, false), false,
-    "an engine that cannot run hands the pane back to LocalSend")
-  assert.equal(pane("quickshare", true, true), true, "and Quick Share returns the moment it can")
-  assert.equal(pane("localsend", true, true), false, "the stored preference still wins the other way")
-  assert.equal(pane("quickshare", false, false), true,
-    "before the first report the pane stays put rather than flashing LocalSend for one probe")
-}
-
-{
   const state = engine()
   state.beginOutgoing({kind: "text", device: state.selectedDevice, text: "pending"})
   const transferId = state.outgoingTransferId
@@ -1240,9 +1194,10 @@ function nearbyEngine(document, extra = {}) {
   assert.equal(state.persistReceiverEnabled(true), false)
   assert.equal(Model.receiverEnabledIn(reread(state, api)), true)
 
-  state.persistMode("quickshare")
+  state.persistDeviceName("custom", "Desk")
   const entry = reread(state, api)
-  assert.equal(Model.modeIn(entry), "quickshare")
+  assert.equal(Model.deviceNameModeIn(entry), "custom")
+  assert.equal(Model.customDeviceNameIn(entry), "Desk")
   assert.equal(Model.receiverEnabledIn(entry), true, "and one setting does not clear another")
   assert.equal(entry.settings.tooltip, "keep me")
   assert.equal(api.document.bar.layout.right.length, 1, "no duplicate entry is ever created")
@@ -1278,20 +1233,20 @@ function nearbyEngine(document, extra = {}) {
   // created, never the items[] entry, so the marker is where the round trip
   // has to close.
   const {state, api} = nearbyEngine({version: 1,
-    bar: {layout: {right: [{id: "t1nk33r.nook", items: [{id: "t1nk33r.nearby-share", mode: "quickshare"}]}]}},
+    bar: {layout: {right: [{id: "t1nk33r.nook", items: [{id: "t1nk33r.nearby-share", deviceNameMode: "generated"}]}]}},
     plugins: [{id: "t1nk33r.nook"}, {id: "t1nk33r.nearby-share"}]})
   assert.equal(state.settingsSource, "plugins")
   assert.equal(state.receiverEnabled, true)
-  assert.equal(Model.modeIn(state.configEntry), "quickshare",
+  assert.equal(Model.deviceNameModeIn(state.configEntry), "generated",
     "the drawer's items entry still supplies what the marker does not carry")
 
   assert.equal(state.persistReceiverEnabled(false), true)
-  assert.deepEqual(api.document.bar.layout.right[0].items, [{id: "t1nk33r.nearby-share", mode: "quickshare"}],
-    "the drawer's contents are not touched, and the mode it declares is not copied out")
+  assert.deepEqual(api.document.bar.layout.right[0].items, [{id: "t1nk33r.nearby-share", deviceNameMode: "generated"}],
+    "the drawer's contents are not touched, and the setting it declares is not copied out")
   assert.deepEqual(api.document.plugins[1], {id: "t1nk33r.nearby-share", receiverEnabled: false})
   const entry = reread(state, api)
   assert.equal(Model.receiverEnabledIn(entry), false)
-  assert.equal(Model.modeIn(entry), "quickshare")
+  assert.equal(Model.deviceNameModeIn(entry), "generated")
 }
 
 {
@@ -1506,8 +1461,9 @@ assert.match(source, /environment: \(\{ "HOSTNAME": root\.advertisedName \}\)/,
 // reads undefined there. That is the logged failure --
 //   TypeError: Property 'noteDependencies' of object QuickShare_QMLTYPE_1072
 //   is not a function
-// -- at QuickShare.qml:172, from the dependency probe's onExited after a hot
-// reload, with no line number because it happened inside destruction.
+// -- at QuickShare.qml:172 (the Quick Share engine, since removed), from the
+// dependency probe's onExited after a hot reload, with no line number because
+// it happened inside destruction. Service.qml has the same shape.
 //
 // Every handler is run here against three shapes of gone engine. A handler that
 // reaches the engine any other way, or skips the check, throws.
@@ -1539,7 +1495,7 @@ function liveOwner(calls) {
   }})
 }
 
-for (const file of ["../Service.qml", "../QuickShare.qml"]) {
+for (const file of ["../Service.qml"]) {
   const text = fs.readFileSync(require.resolve(file), "utf8")
   // `tearingDown` has to be the first thing the handler does, whether the
   // handler is one statement or a block: the service clears its Bridge

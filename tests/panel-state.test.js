@@ -50,8 +50,8 @@ assert.equal(source.includes('PanelSectionHeader { text: "NEARBY"'), false,
   "the device section must not repeat the panel title")
 assert.equal(source.includes('text:root.incomingPinEnabled?"PIN protection is enabled"'), false,
   "PIN settings must not repeat the state already shown in the hero")
-assert.equal((source.match(/text:"Back"/g) || []).length, 4,
-  "the LocalSend device actions, PIN settings, device name and Quick Share send screens each need a visible mouse exit")
+assert.equal((source.match(/text:"Back"/g) || []).length, 3,
+  "the device actions, PIN settings and device name screens each need a visible mouse exit")
 
 assert.equal(source.includes("closeStdin"), false, "Quickshell Process does not expose closeStdin")
 assert.match(source, /onStarted:\s*\{[^}]*write\(root\.incomingText\);\s*stdinEnabled=false\s*\}/,
@@ -156,7 +156,7 @@ function extractFunction(name) {
     // Comments come before the quote test on purpose: prose is allowed to hold
     // an apostrophe ("the pane's own rows"), and without this the extractor
     // reads that apostrophe as an opening string and swallows the rest of the
-    // function. The Quick Share harness learned the same lesson first.
+    // function.
     if (character === "/" && source[index + 1] === "/") {
       const end = source.indexOf("\n", index)
       if (end === -1) break
@@ -188,52 +188,21 @@ const functionNames = [
   "retryHelper", "copyText", "copyUpdateCommand", "copyRepositoryLink", "noteHover",
   // device name pane
   "openDeviceName", "closeDeviceName", "chooseNameMode", "submitCustomName", "focusCustomName",
-  // Quick Share pane
-  "setMode", "qsScan", "qsChooseDevice", "qsBack", "qsCancel", "qsFinish",
-  "qsSelectFiles", "installDependencies", "configureFirewall",
 ]
 
 // Every call the view makes has to land on the shared engine, so the stub
 // records rather than implements.
-function stubQuickShare(calls, record) {
-  return {
-    available: true,
-    depsChecked: true,
-    missingDeps: [],
-    devices: [],
-    selectedDevice: null,
-    viewState: "nearby",
-    statusText: "",
-    errorText: "",
-    progress: 0,
-    transferName: "",
-    transferPeer: "",
-    transferPin: "",
-    scan: record("qs.scan"),
-    chooseDevice: record("qs.chooseDevice"),
-    clearTarget: record("qs.clearTarget"),
-    cancelSend: record("qs.cancelSend"),
-    finishTerminal: record("qs.finishTerminal"),
-    sendFiles: record("qs.sendFiles"),
-    refreshDependencies: record("qs.refreshDependencies"),
-    failWith: record("qs.failWith"),
-  }
-}
-
 function stubEngine() {
   const calls = []
   const record = name => (...args) => { calls.push([name, ...args]); return undefined }
   return {
     calls,
-    mode: "localsend",
     generatedName: "Amber Otter",
-    setMode: record("setMode"),
     openDeviceName: record("openDeviceName"),
     closeDeviceName: record("closeDeviceName"),
     chooseNameMode: record("chooseNameMode"),
     submitCustomName: record("submitCustomName"),
     requestCustomNameFocus: record("requestCustomNameFocus"),
-    quickshare: stubQuickShare(calls, record),
     toggleReceiver: record("toggleReceiver"),
     startDiscovery: record("startDiscovery"),
     forceFullDiscovery: record("forceFullDiscovery"),
@@ -304,30 +273,16 @@ function panel(initial = {}) {
     receiverEnabled: true,
     backendReady: true,
     incomingPinEnabled: false,
-    // Quick Share view state. Defaults keep every pre-existing test in the
-    // LocalSend pane, which is the pane those tests were written against.
-    quickShareMode: false,
     deviceNameMode: "hostname",
     customDeviceName: "",
     advertisedName: "luna",
     systemHostname: "luna",
     generatedPreview: "Amber Otter",
     nameInput: {text: ""},
-    qsViewState: "nearby",
-    qsAvailable: true,
-    qsChecked: true,
-    qsDevices: [],
-    qsSelected: null,
-    qsMissingDeps: [],
-    qsScriptDir: "/tmp/nearby-share/scripts",
-    qsPicker: {running: false, launched: false},
-    depsInstaller: {running: false},
-    firewallSetup: {running: false},
     ...initial,
   }
-  if (context.qs === undefined) context.qs = engine ? engine.quickshare : null
   context.engine = engine
-  for (const name of ["helperUpdateIndex", "helperCopyCommandIndex", "helperCopyLinkIndex", "qsLastIndex"]) {
+  for (const name of ["helperUpdateIndex", "helperCopyCommandIndex", "helperCopyLinkIndex"]) {
     const expression = intBindingExpression(name)
     Object.defineProperty(context, name, {
       enumerable: true,
@@ -505,34 +460,19 @@ function callNames(state) {
   state.moveCursor(0, 5)
   assert.equal(state.selectedIndex, 3, "the cursor stops on incoming PIN settings after rescan")
   state.moveCursor(0, -9)
-  // Three controls sit above the device list, and each must be its own stop:
-  // -3 the device-name cog, -2 the protocol switcher, -1 the receiver switch.
-  // The ceiling has moved twice as controls were added, so this walks the whole
-  // run rather than asserting a single index.
-  assert.equal(state.selectedIndex, -3, "the cursor stops on the device-name cog, the topmost control")
+  // Two controls sit above the device list, and each must be its own stop:
+  // -2 the device-name cog, -1 the receiver switch. The ceiling has moved as
+  // controls came and went, so this walks the whole run rather than asserting
+  // a single index.
+  assert.equal(state.selectedIndex, -2, "the cursor stops on the device-name cog, the topmost control")
   state.moveCursor(0, 1)
-  assert.equal(state.selectedIndex, -2, "the mode switcher is a stop below the cog")
-  state.moveCursor(0, 1)
-  assert.equal(state.selectedIndex, -1, "the receiver switch stays reachable below the mode switcher")
+  assert.equal(state.selectedIndex, -1, "the receiver switch is a stop below the cog")
   state.moveCursor(0, -1)
   assert.equal(state.selectedIndex, -2)
   state.selectedIndex = 2
   state.moveCursor(1, 0)
   assert.equal(state.selectedIndex, 3, "left and right must navigate the compact Nearby action row")
   assert.equal(state.engine.calls.length, 0, "moving a cursor is local to one monitor")
-}
-
-// The switcher is drawn only while the engine can run (deps present, radio
-// ready). When it is hidden its row is a gap the walk must carry past, or the
-// cursor lands on something that is not there and Enter changes panes.
-{
-  const state = panel({viewState: "nearby", qsAvailable: false,
-    devices: [{alias: "A"}, {alias: "B"}], selectedIndex: -3})
-  state.moveCursor(0, 1)
-  assert.equal(state.selectedIndex, -1, "the receiver switch follows the cog, over the hidden switcher's row")
-  state.moveCursor(0, -1)
-  assert.equal(state.selectedIndex, -3, "and back up, skipping it again")
-  assert.equal(state.engine.calls.length, 0, "still a local move")
 }
 
 {
@@ -701,22 +641,15 @@ function callNames(state) {
     "the pane is escapable without closing the popup")
 }
 
-// The cog belongs to the LocalSend hero. Firing it from the Quick Share pane
-// opened a view that pane cannot render and cannot leave.
+// The cog is the hero's topmost control.
 {
-  const state = panel({quickShareMode: true, viewState: "nearby", selectedIndex: -3})
-  state.activateCursor()
-  assert.equal(state.engine.calls.some(c => c[0] === "openDeviceName"), false,
-    "the name cog must not fire from the Quick Share pane")
-}
-{
-  const state = panel({quickShareMode: false, viewState: "nearby", selectedIndex: -3})
+  const state = panel({viewState: "nearby", selectedIndex: -2})
   state.activateCursor()
   assert.deepEqual(state.engine.calls.at(-1), ["openDeviceName"],
-    "but it does from the LocalSend pane")
+    "Enter on the cog opens the device name pane")
 }
-assert.match(source, /trailingControl: !root\.quickShareMode && root\.viewState === "nearby"/,
-  "the hero controls are gated on the pane, not on viewState alone")
+assert.match(source, /trailingControl: root\.viewState === "nearby" \? nearbyHeroControls : null/,
+  "the hero controls belong to the device list view only")
 assert.match(source, /root\.viewState==="device_name"&&nameInput\.activeFocus/,
   "the key catcher must yield while the name field has focus, per the UI kit contract")
 
@@ -726,4 +659,4 @@ console.log("panel state tests passed")
 // copyUpdateCommand) is adopted, but where upstream and the fork genuinely
 // disagree -- the repository URL and the plugin id in the recovery command --
 // the local fork values (t1nk333r/omarchy-nearby-share, t1nk33r.nearby-share)
-// are kept, along with the fork's Quick Share pane and mode-switcher cursor row.
+// are kept.

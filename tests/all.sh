@@ -6,10 +6,6 @@ ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 node "$ROOT_DIR/tests/model.test.js"
 node "$ROOT_DIR/tests/service-state.test.js"
 node "$ROOT_DIR/tests/panel-state.test.js"
-# The Quick Share engine's stderr parser, exit-code mapping and dependency
-# verdict. CI has run this suite since it landed while this file did not, so the
-# one place a local run and CI disagreed was here.
-node "$ROOT_DIR/tests/quickshare-state.test.js"
 "$ROOT_DIR/tests/qml.test.sh"
 
 # The updater test drives the real bin/nearby-update-helper, which install.sh

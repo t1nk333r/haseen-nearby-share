@@ -1,70 +1,30 @@
 # Nearby Share
 
-LocalSend and Google Quick Share in one Omarchy panel, switched by two buttons
-at the top.
+Send and receive files and clipboard text with LocalSend, from one Omarchy
+panel.
 
 > **This is a fork.** The LocalSend engine, the Rust helper and the panel it
 > lives in are [jfg96/omarchy-nearby](https://github.com/jfg96/omarchy-nearby)
-> (MIT), unchanged except where noted below. What this fork adds is the Quick
-> Share pane, the mode switcher, dependency installation on pull, and the
-> firewall script. The Quick Share half also gates on a radio probe rather than
-> on a hand-set flag: with the CLI installed but the Wi-Fi radio down — an
-> Ethernet desktop's ordinary state — the pane and its switcher stay out of the
-> way instead of offering a transfer that cannot happen, and they come back on
-> the day the radio does. Upstream is kept as a git remote so fixes can be
-> rebased in.
+> (MIT), unchanged except where noted below. Upstream is kept as a git remote so
+> fixes can be rebased in.
 >
-> Independent project. Not affiliated with or endorsed by LocalSend, Google or
-> Omarchy.
+> Independent project. Not affiliated with or endorsed by LocalSend or Omarchy.
 
 ## What the fork adds
 
-- **Two panes, one widget.** A LocalSend pane (upstream's, native, unchanged)
-  and a Quick Share pane, selected by two buttons under the header. The choice
-  persists in `shell.json` and applies to every monitor.
-- **Quick Share sending** — device discovery, file send, the phone's
-  confirmation PIN, and transfer progress.
+- **A name you choose.** The cog in the panel header picks what this machine
+  advertises: its hostname, a generated name, or one you type.
+- **Settings that stick.** They are read from `shell.json` and written through
+  the shell's per-entry writer, wherever the widget is placed (see Settings).
+- **Any bar.** The widget finds its engine under a replacement bar too, not only
+  under Omarchy's own.
 - **Dependencies installed on pull** — a tracked `post-merge` hook notices when
   an update introduced a program the machine does not have, and opens an
   installer in a terminal.
-- **Firewall rules** — one script for both protocols, `ufw` and `firewalld`.
+- **Firewall rules** — one script, `ufw` and `firewalld`.
 
-## Quick Share: how it works, and what it cannot do
-
-Quick Share has no library this plugin can embed the way LocalSend does.
-[rquickshare](https://github.com/Martichou/rquickshare) is a Tauri app that
-ignores `argv`, and `rqs_lib` is a library rather than a daemon. This pane
-therefore drives [`martinalderson/qs`](https://github.com/martinalderson/qs), a
-CLI over a fork of `rqs_lib`, as short-lived subprocesses.
-
-`qs` is **GPL-3.0**. It is not vendored, redistributed or linked here -- it is
-built from source on your machine by `scripts/dependencies.sh` and executed as
-a separate program. This repository stays MIT.
-
-**Sending works. Receiving is fixed in the CLI, and not yet in the pane.**
-The blocker this pane documented was `qs receive`: it refused to run without a
-TTY unless given `--yes`, which auto-accepts every inbound transfer on the
-network with no chance to decline. That is now fixed where it belongs.
-`patches/qs-events.patch` adds `--events`, a line-oriented protocol that reports
-an incoming request as an event and takes an accept or decline on stdin —
-defaulting to decline on every path: no answer within the timeout, a closed
-stream, a malformed command, an unknown id. `scripts/dependencies.sh` clones the
-pinned revision and applies that patch before building.
-
-What remains is the consumer: a receive engine in `QuickShare.qml` that speaks
-the protocol and drives the request queue and the consent column this pane
-already has for LocalSend. Until it lands, the pane still sends only, and the
-LocalSend pane is still the one that can receive.
-
-Quick Share also sends files only. `rqs_lib` can carry text, but the CLI
-exposes no way to hand it any -- use LocalSend for clipboard text.
-
-### The binary is not called `qs`
-
-`/usr/bin/qs` is Quickshell's own CLI, shipped by the package the whole Omarchy
-shell runs on. Installing this `qs` onto `PATH` either shadows Quickshell's
-binary or is shadowed by it, and both fail silently. The build therefore
-installs it as `bin/nearby-qs` and every caller uses that absolute path.
+Earlier versions of this fork also carried a Google Quick Share pane. It is
+gone: the widget is LocalSend only.
 
 ## Install
 
@@ -84,54 +44,32 @@ with upstream's installer or build it with `./build.sh` (needs Rust).
 
 ### Dependencies
 
-Everything except the Rust toolchain is usually already present on Omarchy:
+Both are usually already present on Omarchy:
 
 ```sh
-sudo pacman -S --needed rustup protobuf base-devel pkgconf dbus \
-                        bluez bluez-libs bluez-utils iw wl-clipboard libnotify
-rustup default stable
+sudo pacman -S --needed wl-clipboard libnotify
 ```
 
-`protobuf` is needed because `rqs_lib`'s `build.rs` compiles its `.proto` files
-at build time. `bluez` is needed because Quick Share discovery uses Bluetooth
-LE, and `iw` is what the radio probe asks about Wi-Fi Direct: without it the
-probe cannot tell a missing tool from a driver that has no P2P, so it says so
-and `--install` offers the package. `scripts/dependencies.sh --json` reports
-what is missing and `--install` installs it.
-
-`qs` is built from a pinned revision (`QS_REV` in `scripts/dependencies.sh`,
-also written to `bin/nearby-qs.rev` at install time) and with `--locked`, so
-everyone builds the same code from upstream's own lockfile. Bumping that
-revision is a behaviour change, not a chore: `QuickShare.qml` recovers the
-confirmation PIN and the progress from this binary's stderr prose, so a new
-revision has to be re-checked against that parser first.
+`scripts/dependencies.sh --json` reports what is missing and `--install`
+installs it.
 
 ## Firewall
 
-`scripts/setup_firewall.sh` opens four rules:
+`scripts/setup_firewall.sh` opens three rules:
 
 | Port | Why |
 |------|-----|
 | `53317/tcp` | LocalSend transfers |
 | `53317/udp` | LocalSend discovery |
-| `5353/udp`  | mDNS, used by both protocols |
-| `53318/tcp` | Quick Share transfers |
-
-Quick Share normally binds an ephemeral port, which would mean opening the
-whole high range to the LAN. `qs --port` pins it instead, and the plugin always
-passes that flag, so one port is enough. Bluetooth LE discovery does not pass
-through the firewall and needs no rule.
+| `5353/udp`  | mDNS discovery |
 
 ## IPC
 
 ```sh
-omarchy-shell t1nk33r.nearby-share mode              # localsend | quickshare
-omarchy-shell t1nk33r.nearby-share quickshare        # switch pane
-omarchy-shell t1nk33r.nearby-share localsend
-omarchy-shell t1nk33r.nearby-share receiverOn        # also receiverOff, receiverToggle
-omarchy-shell t1nk33r.nearby-share quickshareStatus  # deps + device count
-omarchy-shell t1nk33r.nearby-share status            # LocalSend engine
-omarchy-shell t1nk33r.nearby-share configProbe       # where the settings came from
+omarchy-shell t1nk33r.nearby-share receiverOn    # also receiverOff, receiverToggle
+omarchy-shell t1nk33r.nearby-share name          # the name this machine advertises
+omarchy-shell t1nk33r.nearby-share status        # LocalSend engine
+omarchy-shell t1nk33r.nearby-share configProbe   # where the settings came from
 ```
 
 `status` reports `configured` beside `enabled`: a receiver that is off because
@@ -149,7 +87,7 @@ table binds at registration and a hot-reload does not rebuild it. QML and
 ## Settings
 
 Every setting lives in the plugin's own `~/.config/omarchy/shell.json` entry —
-`receiverEnabled`, `mode`, `deviceNameMode` and `deviceName`, as declared in
+`receiverEnabled`, `deviceNameMode` and `deviceName`, as declared in
 `manifest.json`. There is no second copy: the persisted value *is* the effective
 value, so nothing can drift and the panel's switches survive a shell restart.
 
@@ -166,7 +104,7 @@ placed. `tests/qml.test.sh` fails if either unavailable API comes back.
 ## Upstream documentation
 
 Everything below is upstream's, describing the LocalSend engine this fork
-builds on. It is accurate for the LocalSend pane.
+builds on.
 
 ---
 

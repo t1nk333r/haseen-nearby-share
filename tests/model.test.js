@@ -178,13 +178,12 @@ assert.equal(Model.receiverEnabledIn(Model.barEntry(layoutDefault, "oma.nearby")
   // Hosted inside a drawer. shell.qml's writer never looks inside items[], so
   // it writes the plugins[] marker, and the marker is what has to win.
   const hosted = {version:1, bar:{layout:{right:[
-    {id:"t1nk33r.nook", items:[{id:"oma.nearby", mode:"quickshare"}]}]}},
+    {id:"t1nk33r.nook", items:[{id:"oma.nearby"}]}]}},
     plugins:[{id:"t1nk33r.nook"}, {id:"oma.nearby", receiverEnabled:false}]}
   const hostedEntry = Model.barEntry(hosted, "oma.nearby")
   assert.notEqual(hostedEntry, null, "a widget a drawer hosts must resolve too")
-  assert.deepEqual(hostedEntry.settings, {mode:"quickshare", receiverEnabled:false},
+  assert.deepEqual(hostedEntry.settings, {receiverEnabled:false},
     "the drawer's items entry supplies the settings the marker does not carry")
-  assert.equal(Model.modeIn(hostedEntry), "quickshare")
   assert.equal(Model.receiverEnabledIn(hostedEntry), false,
     "and the marker, which is where a write lands, wins where they disagree")
   assert.equal(hostedEntry.source, "plugins")

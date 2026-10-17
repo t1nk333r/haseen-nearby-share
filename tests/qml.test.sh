@@ -5,12 +5,25 @@ ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 OMARCHY_SOURCE=${OMARCHY_PATH:-/usr/share/omarchy}
 QMLLINT_BIN=$(command -v qmllint 2>/dev/null || true)
 [[ -n $QMLLINT_BIN ]] || QMLLINT_BIN=/usr/lib/qt6/bin/qmllint
-QML_FILES=(Service.qml Panel.qml QuickShare.qml)
+QML_FILES=(Service.qml Panel.qml)
+
 TMP=$(mktemp -d)
 cleanup() { rm -rf -- "$TMP"; }
 trap cleanup EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# LocalSend is the widget's only transport. Keep removed Quick Share code from
+# returning through an overlooked QML entry point, test, or build patch.
+for removed in QuickShare.qml patches/qs-events.patch tests/quickshare-state.test.js; do
+  [[ ! -e $ROOT_DIR/$removed ]] || fail "$removed must not ship with the LocalSend-only widget"
+done
+
+for source in Service.qml Panel.qml Model.js manifest.json scripts/dependencies.sh scripts/setup_firewall.sh; do
+  if grep -qiE 'quick.?share|nearby-qs|rquickshare' "$ROOT_DIR/$source"; then
+    fail "$source must not retain a Quick Share runtime path"
+  fi
+done
 
 # The QML and the library must agree on the function set: Model.js is shared by
 # the service and the widget, and a call to a name it does not export fails at
@@ -46,6 +59,7 @@ for forbidden in shellConfig mutateShellConfig; do
 done
 grep -q 'shell\.updateEntryInline' "$ROOT_DIR/Service.qml" \
   || fail "settings must be written through the sanctioned per-entry writer"
+
 # The view's engine cannot come from the shell alone. `serviceFor()` answers on
 # Omarchy's own bar, which hands a registered widget a service-capable facade;
 # a replacement bar is handed `pluginShellForBarEntry` instead, which has no

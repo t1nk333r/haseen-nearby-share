@@ -6,7 +6,7 @@ HTTP `/register` fallback, and a session whose activity is older than five minut
 an upload is still active. Name sanitisation is covered for `Model.displayName` (markup, control characters,
 whitespace, length cap, leading-flag rejection, emoji survival, idempotence) and
 for the ingestion points that use it: `upsertDevice`, `resolveDeviceName`, and the
-hostname read. `QuickShare.noteDevices` does **not** yet route its alias through it.
+hostname read.
 Incoming-PIN coverage includes secure startup,
 atomic persistence and rollback, exact `401`/`429` behavior, bounded per-IP
 failure state, text/file authorization before events, live PIN changes and an

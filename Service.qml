@@ -70,27 +70,7 @@ Item {
   readonly property string settingsSource: configEntry ? String(configEntry.source) : ""
   readonly property bool settingsWritable: Model.entryWritable(configEntry)
   readonly property bool receiverEnabled: Model.receiverEnabledIn(configEntry)
-  // Which of the two panes is showing. Read from the same config entry as
-  // receiverEnabled so the persisted value and the effective value cannot
-  // drift, and so the choice survives a shell restart.
-  readonly property string mode: Model.modeIn(configEntry)
-  // The pane actually drawn, which is not always the preference: with the CLI
-  // missing or the radio down, `mode` stays "quickshare" but the Quick Share
-  // pane cannot do anything and the switcher that would leave it is hidden
-  // (it is gated on availability, deliberately -- there is nothing to switch
-  // to). The popup was then a dead end with no way back to LocalSend, which is
-  // the ordinary state of a desktop whose Wi-Fi is off. Folding the verdict in
-  // here gives the pane back to LocalSend for as long as the engine cannot run,
-  // and gives Quick Share back the moment it can, with no flag to reset.
-  //
-  // `depsChecked` is part of the condition so the fallback waits for an answer
-  // rather than for the probe: before the first report the pane would otherwise
-  // render LocalSend for as long as `dependencies.sh` takes to run, on every
-  // shell start, and swap under the cursor when the report arrived.
-  readonly property bool quickShareMode: mode === "quickshare"
-    && (!quickShareEngine.depsChecked || quickShareEngine.available)
-  readonly property var quickshare: quickShareEngine
-  // The name this machine advertises. Three sources; only the mode and the
+  // The name this machine advertises. Three sources; only the source mode and
   // custom string are persisted, because hostname and generated are derived.
   readonly property string deviceNameMode: Model.deviceNameModeIn(configEntry)
   readonly property string customDeviceName: Model.customDeviceNameIn(configEntry)
@@ -204,8 +184,7 @@ Item {
   // parent's QML metaobject is destroyed, so `root.anything()` throws a
   // TypeError right inside the destruction path. Every such handler below
   // reaches the engine through `owner`, captured at construction, and checks it
-  // is still callable first. This is the QuickShare.qml:172 crash, in the two
-  // files that have the shape.
+  // is still callable first.
   property bool tearingDown: false
   Component.onDestruction: {
     tearingDown = true
@@ -336,18 +315,7 @@ Item {
     function receiverOn(): string { if (!root.receiverEnabled) root.toggleReceiver(); return "ok" }
     function receiverOff(): string { if (root.receiverEnabled) root.toggleReceiver(); return "ok" }
     function receiverToggle(): string { root.toggleReceiver(); return "ok" }
-    // The pane switch, for a keybinding or a script. `mode` with no argument
-    // reports; the two named methods select.
     function name(): string { return root.advertisedName }
-    function mode(): string { return root.mode }
-    function localsend(): string { root.setMode("localsend"); return "ok" }
-    function quickshare(): string { root.setMode("quickshare"); return "ok" }
-    // Quick Share has no resident process to ask, so this reports what the
-    // last dependency probe found rather than a live connection.
-    function quickshareStatus(): string {
-      return JSON.stringify({available:quickShareEngine.available,checked:quickShareEngine.depsChecked,
-        missing:quickShareEngine.missingDeps,devices:quickShareEngine.devices.length,state:quickShareEngine.viewState})
-    }
     // The same repair the panel button runs, for a shell whose bar is not
     // where the user is looking when the helper stops matching.
     function retryHelper(): string { if (root.helperUpdating) return "busy"; root.startHelperUpdate(); return "ok" }
@@ -391,17 +359,6 @@ Item {
   function viewOpened() {
     openViewCount++
     if (openViewCount !== 1) return
-    // Probed on every open, whichever pane is showing, not only from inside the
-    // Quick Share branch. That branch is only reached once the engine can run,
-    // so in the state the fallback exists for -- radio down, pane on LocalSend
-    // -- nothing would ever re-read the radio, and "it returns on its own when
-    // the radio comes up" would be true only after a restart. One short bash
-    // run per popup open, and the answer is what lets the pane come back.
-    quickShareEngine.refreshDependencies()
-    if (quickShareMode) {
-      if (quickShareEngine.available && quickShareEngine.viewState === "nearby") quickShareEngine.scan()
-      return
-    }
     if (viewState === "nearby" && receiverEnabled && backendReady) startDiscovery()
   }
   function viewClosed() {
@@ -487,10 +444,6 @@ Item {
   // receiverEnabled follows the entry, so writing the entry is what turns the
   // receiver on or off. There is no second copy of the state to keep in step.
   function persistReceiverEnabled(enabled) { return persistSettings({ receiverEnabled: enabled }) }
-  function persistMode(next) { return persistSettings({ mode: next }) }
-  // Switching panes abandons neither transfer: the LocalSend helper keeps
-  // receiving while the Quick Share pane is showing, and a `qs send` in flight
-  // survives a switch back. Only the cursor and the per-pane target reset.
   function persistDeviceName(mode, custom) {
     var wanted = (mode === "hostname" || mode === "generated" || mode === "custom") ? mode : "hostname"
     return persistSettings({ deviceNameMode: wanted, deviceName: String(custom || "") })
@@ -555,17 +508,6 @@ Item {
     if (!restartingForName) return
     if (backend.running) { nameShutdownFallback.restart(); return }
     finishReceiverShutdown()
-  }
-
-  function setMode(next) {
-    var wanted = next === "quickshare" ? "quickshare" : "localsend"
-    if (wanted === mode) return
-    persistMode(wanted)
-    cursorRequested(0)
-    if (wanted === "quickshare") {
-      quickShareEngine.refreshDependencies()
-      if (anyViewOpen && quickShareEngine.available) quickShareEngine.scan()
-    }
   }
 
   function toggleReceiver() {
@@ -974,10 +916,4 @@ Item {
   Timer { id: nameShutdownFallback; interval: 2000; repeat: false; onTriggered: root.finishNameShutdown() }
   Timer { id: receiverShutdownFallback; interval: 250; repeat: false; onTriggered: root.finishReceiverShutdown() }
 
-  QuickShare {
-    id: quickShareEngine
-    pluginDir: root.pluginDir
-    advertisedName: root.advertisedName
-    onCursorRequested: function(index) { root.cursorRequested(index) }
-  }
 }

@@ -275,16 +275,6 @@ function receiverEnabledIn(entry) {
   return !!entry && !!entry.settings && entry.settings.receiverEnabled !== false
 }
 
-// Which pane the two buttons last left selected. Anything unrecognised falls
-// back to localsend, which is the pane that works without a build step.
-function modeIn(entry) {
-  var mode = entry && entry.settings ? String(entry.settings.mode || "") : ""
-  return mode === "quickshare" ? "quickshare" : "localsend"
-}
-
-// `qs` reports phone/tablet/computer/device; the LocalSend helper reports
-// mobile/web/server/headless. Two vocabularies for one icon set, so the Quick
-// Share names are mapped rather than added to iconFor's.
 // Remote device names arrive from unauthenticated LAN advertisements, and the
 // shared Omarchy UI kit renders Button.text and PanelHero.title/meta with Qt's
 // default AutoText, which turns anything that looks like markup into markup.
@@ -296,10 +286,8 @@ function displayName(value, limit) {
   var max = Number(limit || 64)
   text = text.replace(/[<>]/g, "").replace(/[\x00-\x1F\x7F]/g, " ")
   text = text.replace(/\s+/g, " ").trim()
-  // A leading hyphen makes the name parse as a flag where it is passed to the
-  // Quick Share CLI as `--name <value>`, killing every invocation with a usage
-  // error: `--name "-Luna"` reports "unexpected argument '-L' found". Interior
-  // hyphens are fine and must survive.
+  // Keep a name that reaches another program from being parsed as an option.
+  // Interior hyphens are ordinary text and must survive.
   text = text.replace(/^[-+]+/, "").trim()
   if (text.length > max) text = text.slice(0, max - 1) + "\u2026"
   return text
@@ -342,11 +330,6 @@ function resolveDeviceName(entry, hostname, seed) {
   if (mode === "generated") return generatedDeviceName(seed || host || "nearby")
   if (host !== "") return host
   return generatedDeviceName(seed || "nearby")
-}
-
-function quickShareIconFor(type) {
-  if (type === "phone" || type === "tablet") return iconFor("mobile")
-  return iconFor("desktop")
 }
 
 function helperVersionMatches(pluginVersion, helperVersion) {
@@ -430,4 +413,4 @@ function manifestMinHelperVersion(text, pluginId) {
   }
 }
 
-if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, enqueueIncoming, removeIncoming, currentIncoming, outgoingCommand, viewAfterOutgoing, barEntry, entryWritable, shellConfigIn, receiverEnabledIn, modeIn, quickShareIconFor, displayName, deviceNameModeIn, customDeviceNameIn, generatedDeviceName, resolveDeviceName, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }
+if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, enqueueIncoming, removeIncoming, currentIncoming, outgoingCommand, viewAfterOutgoing, barEntry, entryWritable, shellConfigIn, receiverEnabledIn, displayName, deviceNameModeIn, customDeviceNameIn, generatedDeviceName, resolveDeviceName, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }

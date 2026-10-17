@@ -41,54 +41,6 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color barIconColor: root.receiverEnabled ? barForeground : Qt.darker(barForeground, 1.55)
 
-  // Engine state, read under the names the popup already used. A view with no
-  // engine says so rather than rendering an empty panel.
-  // Which pane is drawn. The engine owns the answer, and it is not simply the
-  // stored preference: when the CLI is missing or the radio is down the engine
-  // falls the pane back to LocalSend, because the switcher is hidden in that
-  // state and the Quick Share pane has nothing to show and no way out of itself.
-  // Asking the engine rather than recomputing it here keeps one verdict in one
-  // place; with no engine at all, LocalSend is the pane that always works.
-  readonly property bool quickShareMode: engine ? engine.quickShareMode : false
-  readonly property var qs: engine ? engine.quickshare : null
-
-  // The Quick Share pane's own state, read under names that parallel the
-  // LocalSend ones above rather than reaching into `qs` at every use.
-  readonly property bool qsAvailable: qs ? qs.available : false
-  readonly property bool qsChecked: qs ? qs.depsChecked : false
-  readonly property bool qsScanning: qs ? qs.scanning : false
-  readonly property var qsDevices: qs ? qs.devices : []
-  readonly property var qsSelected: qs ? qs.selectedDevice : null
-  readonly property string qsViewState: qs ? qs.viewState : "nearby"
-  readonly property string qsStatusText: qs ? qs.statusText : "Quick Share engine is not loaded."
-  readonly property string qsErrorText: qs ? qs.errorText : ""
-  readonly property real qsProgress: qs ? qs.progress : 0
-  readonly property string qsTransferName: qs ? qs.transferName : ""
-  readonly property string qsTransferPeer: qs ? qs.transferPeer : ""
-  readonly property string qsTransferPin: qs ? qs.transferPin : ""
-  readonly property var qsMissingDeps: qs ? qs.missingDeps : []
-  // The radio's own sentence, when it has one: a machine can have every
-  // dependency and still not run this, and the pane names which case it is.
-  readonly property string qsRadioReason: qs && qs.radioReason ? qs.radioReason : ""
-
-  // The engine resolves the plugin directory from its own manifest metadata,
-  // which is the only place that knows where an installed copy actually is.
-  readonly property string qsScriptDir: (engine && engine.pluginDir
-    ? engine.pluginDir
-    : (Quickshell.env("HOME") || "") + "/.config/omarchy/plugins/" + manifestPluginId) + "/scripts"
-  // That directory is interpolated into a `bash -c` string between single
-  // quotes, so a quote anywhere in it would end the quoted region early and the
-  // rest of the path would be read as commands. '\'' is the only escape a
-  // single-quoted string has: close it, escape the quote, reopen it.
-  readonly property string qsScriptDirQuoted: qsScriptDir.replace(/'/g, "'\\''")
-
-  // Last reachable cursor row in the Quick Share pane. Index -2 is the mode
-  // switcher in both panes; dx there flips protocol rather than moving,
-  // because the two buttons are one control.
-  readonly property int qsLastIndex: qsViewState !== "nearby"
-    ? 0
-    : (qsAvailable ? qsDevices.length : 0)
-
   readonly property string deviceNameMode: engine ? engine.deviceNameMode : "hostname"
   readonly property string customDeviceName: engine ? engine.customDeviceName : ""
   readonly property string advertisedName: engine ? engine.advertisedName : ""
@@ -196,17 +148,6 @@ Panel {
     function onFocusRestoreRequested() { if (root.opened) Qt.callLater(function(){ keyCatcher.forceActiveFocus() }) }
   }
 
-  function setMode(next) { if (engine) engine.setMode(next) }
-  function qsScan() { if (qs) qs.scan() }
-  function qsChooseDevice(index) { if (qs) qs.chooseDevice(index) }
-  function qsBack() { if (qs) qs.clearTarget() }
-  function qsCancel() { if (qs) qs.cancelSend() }
-  function qsFinish() { if (qs) qs.finishTerminal() }
-  // The chooser belongs to the monitor the user acted on, same as LocalSend's.
-  function qsSelectFiles() { if (!qsSelected || qsPicker.running) return; qsPicker.launched = false; qsPicker.running = true }
-  function installDependencies() { if (!depsInstaller.running) depsInstaller.running = true }
-  function configureFirewall() { if (!firewallSetup.running) firewallSetup.running = true }
-
   function openDeviceName() { if (engine) engine.openDeviceName() }
   function closeDeviceName() { if (engine) engine.closeDeviceName() }
   function chooseNameMode(mode) { if (engine) engine.chooseNameMode(mode) }
@@ -238,14 +179,7 @@ Panel {
   function failWith(message) { if (engine) engine.failWith(message) }
   function noteTextCopied() { if (engine) engine.noteTextCopied() }
   function beginOutgoing(pending) { if (engine) engine.beginOutgoing(pending) }
-  function goBack() {
-    if (quickShareMode) {
-      if (qsViewState === "target") { qsBack(); return }
-      if (qsViewState === "success" || qsViewState === "error") { qsFinish(); return }
-      close(); return
-    }
-    return goBackLocalSend()
-  }
+  function goBack() { return goBackLocalSend() }
   function goBackLocalSend() { if (viewState === "device_name") { closeDeviceName(); return } if (viewState === "pin") cancelPin(); else if (viewState.indexOf("incoming_pin_")===0) cancelIncomingPinSettings(); else if (viewState === "target") { if (engine) engine.clearTarget() } else close() }
 
   // The chooser and the clipboard belong to the monitor the user acted on, so
@@ -274,32 +208,8 @@ Panel {
 
   function moveCursor(dx, dy) {
     cursorActive = true
-    if (viewState === "device_name" && !quickShareMode) {
+    if (viewState === "device_name") {
       if (dy !== 0) selectedIndex = Math.max(0, Math.min(4, selectedIndex + dy))
-      return
-    }
-    // The switcher's row (-2) is only a stop while the switcher is drawn: with
-    // the engine unavailable -- no CLI, or the radio down -- the pane has
-    // nothing to switch to, so -2 becomes a gap the walk steps over and the
-    // Quick Share pane's own rows start at 0.
-    if (qsAvailable && selectedIndex === -2 && dx !== 0) {
-      setMode(dx > 0 ? "quickshare" : "localsend")
-      return
-    }
-    if (quickShareMode) {
-      var qsFloor = qsAvailable ? -2 : 0
-      if (qsViewState === "target") {
-        // 0 Send files, 1 Back. The ceiling was 2, one past the last row the
-        // pane draws, so the walk stopped on a row that is not there and Enter
-        // on it performed Back a second time.
-        if (dy !== 0) selectedIndex = Math.max(qsFloor, Math.min(1, selectedIndex + dy))
-        return
-      }
-      if (qsViewState === "sending" || qsViewState === "success" || qsViewState === "error") {
-        if (dy !== 0) selectedIndex = Math.max(qsFloor, Math.min(0, selectedIndex + dy))
-        return
-      }
-      if (dy !== 0) selectedIndex = Math.max(qsFloor, Math.min(qsLastIndex, selectedIndex + dy))
       return
     }
     if (viewState === "nearby") {
@@ -319,12 +229,7 @@ Panel {
         return
       }
       if (dy !== 0) {
-        // -2 is the switcher's row. While the engine is unavailable the
-        // switcher is not drawn, so the walk carries past the gap instead of
-        // stopping on a row with nothing in it.
-        var nextRow = selectedIndex + dy
-        if (!qsAvailable && nextRow === -2) nextRow += dy > 0 ? 1 : -1
-        selectedIndex = Math.max(-3, Math.min(lastNearbyIndex, nextRow))
+        selectedIndex = Math.max(-2, Math.min(lastNearbyIndex, selectedIndex + dy))
       }
       return
     }
@@ -340,7 +245,7 @@ Panel {
     if (count > 0 && dy !== 0) selectedIndex = Math.max(0, Math.min(count - 1, selectedIndex + dy))
   }
   function activateCursor() {
-    if (viewState === "device_name" && !quickShareMode) {
+    if (viewState === "device_name") {
       if (selectedIndex === 0) chooseNameMode("hostname")
       else if (selectedIndex === 1) chooseNameMode("generated")
       else if (selectedIndex === 2) chooseNameMode("custom")
@@ -348,26 +253,7 @@ Panel {
       else closeDeviceName()
       return
     }
-    if (qsAvailable && selectedIndex === -2) { setMode(quickShareMode ? "localsend" : "quickshare"); return }
-    if (quickShareMode) {
-      if (qsViewState === "target") {
-        if (selectedIndex === 0) qsSelectFiles()
-        else qsBack()
-        return
-      }
-      if (qsViewState === "sending") { qsCancel(); return }
-      if (qsViewState === "success" || qsViewState === "error") { qsFinish(); return }
-      // Only a missing helper is worth an install; a radio that is down is not
-      // something the installer can fix, and the pane's text says so.
-      if (!qsAvailable) { if (qsMissingDeps.length > 0) installDependencies(); return }
-      if (selectedIndex >= 0 && selectedIndex < qsDevices.length) qsChooseDevice(selectedIndex)
-      else if (selectedIndex === qsDevices.length) qsScan()
-      return
-    }
-    // Below the Quick Share branch deliberately: the cog belongs to the
-    // LocalSend hero, and firing it from the other pane opened a view that
-    // pane cannot render and cannot leave.
-    if (selectedIndex === -3) { openDeviceName(); return }
+    if (selectedIndex === -2) { openDeviceName(); return }
     if (viewState === "nearby") {
       // Checked before the action row: with the helper unusable that row is
       // hidden, and the update button takes the index rescan would have had.
@@ -489,7 +375,7 @@ Panel {
           detail: ""
           foreground: root.foreground; fontFamily: root.fontFamily
           iconComponent: Component { Text { text: root.viewState === "incoming" ? "\u{f0045}" : "\u{f02b9}"; color: root.incoming ? root.urgent : root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.display } }
-          trailingControl: !root.quickShareMode && root.viewState === "nearby" ? nearbyHeroControls : null
+          trailingControl: root.viewState === "nearby" ? nearbyHeroControls : null
         }
         Component {
           id: nearbyHeroControls
@@ -499,8 +385,8 @@ Panel {
               bordered: false; iconText: "\u{f0493}"; text: ""
               tooltipText: "Device name"
               foreground: root.dim; fontFamily: root.fontFamily
-              hasCursor: root.cursorActive && root.selectedIndex === -3
-              onHovered: function(v) { root.noteHover(v, -3) }
+              hasCursor: root.cursorActive && root.selectedIndex === -2
+              onHovered: function(v) { root.noteHover(v, -2) }
               onClicked: root.openDeviceName()
             }
           ToggleSwitch {
@@ -513,48 +399,8 @@ Panel {
           }
           }
         }
-        PanelSeparator { visible: root.qsAvailable; width: parent.width }
-
-        // The two protocols, given equal weight. They are genuinely separate
-        // stacks -- a different transport, a different device list, a
-        // different binary -- so this switches panes rather than filtering one
-        // combined list that could never merge cleanly.
-        Row {
-          id: modeSwitch
-          // Hidden, not removed, when the engine cannot run: a control that
-          // switches to a pane which cannot work is worse than no control, and
-          // this way it returns on its own when the radio does.
-          visible: root.qsAvailable
-          width: parent.width; spacing: Style.space(8)
-          Button {
-            width: (parent.width - parent.spacing) / 2
-            bordered: !root.quickShareMode
-            iconText: "󰀂"
-            text: "LocalSend"
-            tooltipText: "LocalSend-compatible sharing"
-            foreground: root.quickShareMode ? root.dim : root.foreground
-            fontFamily: root.fontFamily
-            hasCursor: root.cursorActive && root.selectedIndex === -2 && !root.quickShareMode
-            onHovered: function(v) { root.noteHover(v, -2) }
-            onClicked: root.setMode("localsend")
-          }
-          Button {
-            width: (parent.width - parent.spacing) / 2
-            bordered: root.quickShareMode
-            iconText: "󰄜"
-            text: "Quick Share"
-            tooltipText: "Google Quick Share (Nearby Share)"
-            foreground: root.quickShareMode ? root.foreground : root.dim
-            fontFamily: root.fontFamily
-            hasCursor: root.cursorActive && root.selectedIndex === -2 && root.quickShareMode
-            onHovered: function(v) { root.noteHover(v, -2) }
-            onClicked: root.setMode("quickshare")
-          }
-        }
-        PanelSeparator { visible: root.qsAvailable; width: parent.width }
-
         Column {
-          visible: !root.quickShareMode && root.viewState === "nearby"; width: parent.width; spacing: Style.space(6)
+          visible: root.viewState === "nearby"; width: parent.width; spacing: Style.space(6)
           PanelSectionHeader { text: root.helperBlocksNearby ? "HELPER" : "DEVICES"; foreground:root.foreground; fontFamily:root.fontFamily }
           // Silent while the helper row owns the view: its text there was
           // errorText, which the row states once already.
@@ -627,7 +473,7 @@ Panel {
         }
 
         Column {
-          visible: !root.quickShareMode && root.viewState === "target"; width:parent.width; spacing:Style.space(6)
+          visible: root.viewState === "target"; width:parent.width; spacing:Style.space(6)
           PanelSectionHeader { text:"SEND"; foreground:root.foreground; fontFamily:root.fontFamily }
           Button { width:parent.width; leftAlign:true; iconText:"󰈔"; text:"Send files"; foreground:root.foreground; fontFamily:root.fontFamily; hasCursor:root.cursorActive&&root.selectedIndex===0; onHovered:function(v){root.noteHover(v,0)}; onClicked:root.selectFiles() }
           Button { width:parent.width; leftAlign:true; iconText:"󰅇"; text:"Send clipboard"; foreground:root.foreground; fontFamily:root.fontFamily; hasCursor:root.cursorActive&&root.selectedIndex===1; onHovered:function(v){root.noteHover(v,1)}; onClicked:root.sendClipboard() }
@@ -635,7 +481,7 @@ Panel {
         }
 
         Column {
-          visible: !root.quickShareMode && root.viewState === "pin"; width:parent.width; spacing:Style.space(8)
+          visible: root.viewState === "pin"; width:parent.width; spacing:Style.space(8)
           PanelSectionHeader { text:"RECEIVER PIN"; foreground:root.foreground; fontFamily:root.fontFamily }
           Text { width:parent.width; text:"This receiver requires a PIN"; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body }
           TextField {
@@ -651,7 +497,7 @@ Panel {
         }
 
         Column {
-          visible: !root.quickShareMode && root.viewState === "incoming_pin_settings"; width:parent.width; spacing:Style.space(8)
+          visible: root.viewState === "incoming_pin_settings"; width:parent.width; spacing:Style.space(8)
           Button { visible:!root.incomingPinEnabled; width:parent.width; text:"Enable PIN"; bordered:true; foreground:root.foreground; hasCursor:root.cursorActive&&root.selectedIndex===0; onHovered:function(v){root.noteHover(v,0)}; onClicked:root.beginIncomingPinEdit() }
           Row { visible:root.incomingPinEnabled; width:parent.width; spacing:Style.space(8)
             Button { width:(parent.width-parent.spacing)/2; text:"Change PIN"; bordered:true; foreground:root.foreground; hasCursor:root.cursorActive&&root.selectedIndex===0; onHovered:function(v){root.noteHover(v,0)}; onClicked:root.beginIncomingPinEdit() }
@@ -662,7 +508,7 @@ Panel {
         }
 
         Column {
-          visible: !root.quickShareMode && root.viewState === "incoming_pin_edit"; width:parent.width; spacing:Style.space(8)
+          visible: root.viewState === "incoming_pin_edit"; width:parent.width; spacing:Style.space(8)
           PanelSectionHeader { text:root.incomingPinEnabled?"CHANGE PIN":"ENABLE PIN"; foreground:root.foreground; fontFamily:root.fontFamily }
           Text { width:parent.width; text:"Use 1–64 letters, numbers, dot, underscore, tilde or hyphen"; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body; wrapMode:Text.Wrap }
           TextField {
@@ -679,7 +525,7 @@ Panel {
         }
 
         Column {
-          visible: !root.quickShareMode && root.viewState === "incoming_pin_disable"; width:parent.width; spacing:Style.space(8)
+          visible: root.viewState === "incoming_pin_disable"; width:parent.width; spacing:Style.space(8)
           PanelSectionHeader { text:"DISABLE PIN"; foreground:root.foreground; fontFamily:root.fontFamily }
           Text { width:parent.width; text:"New incoming requests will no longer require a PIN."; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body; wrapMode:Text.Wrap }
           Text { visible:root.incomingPinError!==""; width:parent.width; text:root.incomingPinError; color:root.urgent; font.family:root.fontFamily; font.pixelSize:Style.font.body; wrapMode:Text.Wrap }
@@ -690,7 +536,7 @@ Panel {
         }
 
         Column {
-          visible: !root.quickShareMode && root.viewState === "incoming" && root.incoming; width:parent.width; spacing:Style.space(8)
+          visible: root.viewState === "incoming" && root.incoming; width:parent.width; spacing:Style.space(8)
           Text { width:parent.width; textFormat:Text.PlainText; text:root.incoming ? root.incoming.sender+" wants to send" : ""; color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.title; font.bold:true }
           Text { width:parent.width; textFormat:Text.PlainText; text:root.incoming ? Model.incomingSummary(root.incoming.files)+" · "+Model.formatBytes(root.incoming.total) : ""; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body; elide:Text.ElideRight }
           Text { visible:root.incomingQueue.length>1; width:parent.width; text:(root.incomingQueue.length-1)+(root.incomingQueue.length===2 ? " more request" : " more requests"); color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body }
@@ -701,7 +547,7 @@ Panel {
         }
 
         Column {
-          visible: !root.quickShareMode && (root.viewState==="sending"||root.viewState==="receiving"); width:parent.width; spacing:Style.space(8)
+          visible: root.viewState==="sending"||root.viewState==="receiving"; width:parent.width; spacing:Style.space(8)
           PanelSectionHeader { text:root.viewState==="sending" ? "SENDING" : "RECEIVING"; foreground:root.foreground; fontFamily:root.fontFamily }
           Text { width:parent.width; textFormat:Text.PlainText; text:root.transferName; color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.title; font.bold:true; elide:Text.ElideMiddle }
           Rectangle { width:parent.width; height:Style.space(4); radius:height/2; color:Qt.darker(root.foreground,2.2); Rectangle { width:parent.width*Math.max(0,Math.min(1,root.progress)); height:parent.height; radius:height/2; color:root.foreground; Behavior on width { NumberAnimation { duration:120 } } } }
@@ -710,14 +556,14 @@ Panel {
         }
 
         Column {
-          visible: !root.quickShareMode && (root.viewState==="success"||root.viewState==="error"); width:parent.width; spacing:Style.space(8)
+          visible: root.viewState==="success"||root.viewState==="error"; width:parent.width; spacing:Style.space(8)
           Text { width:parent.width; textFormat:Text.PlainText; text:root.viewState==="success" ? root.statusText : root.errorText; wrapMode:Text.Wrap; color:root.viewState==="error"?root.urgent:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.title; font.bold:true }
           Text { visible:root.viewState==="success"; width:parent.width; textFormat:Text.PlainText; text:root.transferPeer!=="" ? (root.statusText==="Sent"?"to ":"from ")+root.transferPeer : ""; wrapMode:Text.Wrap; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body }
           Button { text:"Done"; bordered:true; foreground:root.foreground; hasCursor:root.cursorActive; onClicked:root.finishTerminal() }
         }
 
         Column {
-          visible: !root.quickShareMode && root.viewState === "device_name"
+          visible: root.viewState === "device_name"
           width:parent.width; spacing:Style.space(6)
           PanelSectionHeader { text:"DEVICE NAME"; foreground:root.foreground; fontFamily:root.fontFamily }
           Text {
@@ -769,7 +615,7 @@ Panel {
         }
 
         Column {
-          visible: !root.quickShareMode && root.viewState==="text"; width:parent.width; spacing:Style.space(8)
+          visible: root.viewState==="text"; width:parent.width; spacing:Style.space(8)
           PanelSectionHeader { text:"RECEIVED TEXT"; foreground:root.foreground; fontFamily:root.fontFamily }
           Text { width:parent.width; textFormat:Text.PlainText; text:root.incomingText; wrapMode:Text.Wrap; maximumLineCount:6; elide:Text.ElideRight; color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.body }
           Row { width:parent.width; spacing:Style.space(8)
@@ -778,172 +624,6 @@ Panel {
           }
         }
 
-        // ---------------------------------------------------------------
-        // Quick Share
-        //
-        // Reads from the `qs` CLI rather than a resident helper, so this pane
-        // has no receiver toggle and no incoming states: `qs receive` cannot
-        // ask the panel for consent off a TTY, it can only auto-accept. Until
-        // the CLI can report an incoming request as an event, offering a
-        // receive switch here would mean accepting every transfer on the LAN
-        // unattended, so the pane sends only and says so.
-        // ---------------------------------------------------------------
-        Column {
-          visible: root.quickShareMode && root.qsViewState === "nearby"
-          width: parent.width; spacing: Style.space(6)
-
-          PanelSectionHeader { text: root.qsAvailable ? "DEVICES" : "SETUP"; foreground:root.foreground; fontFamily:root.fontFamily }
-
-          // Two different not-availables, and the pane says which: a missing
-          // helper can be built, a radio that is down cannot, and only the
-          // first is worth offering an install for.
-          Column {
-            visible: !root.qsAvailable && root.qsChecked
-            width: parent.width; spacing: Style.space(6)
-            Text {
-              width:parent.width; textFormat:Text.PlainText; wrapMode:Text.Wrap
-              text: root.qsMissingDeps.length > 0
-                ? "Quick Share needs a helper this plugin does not ship. It is built from source on this machine."
-                : (root.qsRadioReason !== ""
-                  ? "Quick Share cannot run yet: " + root.qsRadioReason + "."
-                  : "Quick Share cannot run yet on this machine.")
-              color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body
-            }
-            Text {
-              visible: root.qsMissingDeps.length > 0
-              width:parent.width; textFormat:Text.PlainText; wrapMode:Text.Wrap
-              text:"Missing: " + root.qsMissingDeps.join(", ")
-              color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.body
-            }
-            Button {
-              visible: root.qsMissingDeps.length > 0
-              width:parent.width; bordered:true; iconText:"󰇚"; text:"Install dependencies"
-              tooltipText:"Opens a terminal to install what is missing"
-              foreground:root.foreground; fontFamily:root.fontFamily
-              hasCursor:root.cursorActive && root.selectedIndex === 0
-              onHovered:function(v){root.noteHover(v,0)}
-              onClicked:root.installDependencies()
-            }
-          }
-
-          Text {
-            visible: root.qsAvailable && root.qsDevices.length === 0
-            width:parent.width; textFormat:Text.PlainText; wrapMode:Text.Wrap
-            text: root.qsScanning ? "Searching\u2026" : (root.qsErrorText !== "" ? root.qsErrorText : "No devices nearby")
-            color: root.qsErrorText !== "" ? root.urgent : root.dim
-            font.family:root.fontFamily; font.pixelSize:Style.font.body
-            topPadding:Style.space(12); bottomPadding:Style.space(12)
-          }
-
-          Repeater {
-            model: root.qsAvailable ? root.qsDevices : []
-            Button {
-              required property var modelData; required property int index
-              width:parent.width; leftAlign:true; bordered:false
-              iconText: Model.quickShareIconFor(modelData.deviceType)
-              text: modelData.alias
-              foreground:root.foreground; fontFamily:root.fontFamily
-              hasCursor:root.cursorActive && root.selectedIndex === index
-              onHovered:function(v){root.noteHover(v,index)}
-              onClicked:root.qsChooseDevice(index)
-            }
-          }
-
-          Button {
-            visible: root.qsAvailable
-            width:parent.width; bordered:false; iconText:"󰑐"
-            text: "Search for devices"
-            tooltipText:"Quick Share only lists devices while it is looking"
-            enabled: !root.qsScanning
-            foreground:root.foreground; fontFamily:root.fontFamily
-            hasCursor:root.cursorActive && root.selectedIndex === root.qsDevices.length
-            onHovered:function(v){root.noteHover(v,root.qsDevices.length)}
-            onClicked:root.qsScan()
-          }
-
-          Button {
-            width:parent.width; bordered:false; iconText:"󰌵"; text:"Firewall rules"
-            tooltipText:"Open the ports both protocols need"
-            foreground:root.dim; fontFamily:root.fontFamily
-            onClicked:root.configureFirewall()
-          }
-        }
-
-        Column {
-          visible: root.quickShareMode && root.qsViewState === "target"
-          width:parent.width; spacing:Style.space(6)
-          PanelSectionHeader { text:"SEND"; foreground:root.foreground; fontFamily:root.fontFamily }
-          Button {
-            width:parent.width; leftAlign:true; iconText:"󰈔"; text:"Send files"
-            foreground:root.foreground; fontFamily:root.fontFamily
-            hasCursor:root.cursorActive&&root.selectedIndex===0
-            onHovered:function(v){root.noteHover(v,0)}; onClicked:root.qsSelectFiles()
-          }
-          // No clipboard row: `qs send` takes file paths only. rqs_lib can
-          // carry text, but the CLI exposes no way to hand it any.
-          Text {
-            width:parent.width; textFormat:Text.PlainText; wrapMode:Text.Wrap
-            text:"Quick Share sends files only. Use LocalSend for clipboard text."
-            color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body
-          }
-          Button {
-            width:parent.width; leftAlign:true; bordered:false; iconText:"󰅁"; text:"Back"
-            foreground:root.dim; fontFamily:root.fontFamily
-            hasCursor:root.cursorActive&&root.selectedIndex===1
-            onHovered:function(v){root.noteHover(v,1)}; onClicked:root.qsBack()
-          }
-        }
-
-        Column {
-          visible: root.quickShareMode && root.qsViewState === "sending"
-          width:parent.width; spacing:Style.space(8)
-          PanelSectionHeader { text:"SENDING"; foreground:root.foreground; fontFamily:root.fontFamily }
-          Text { width:parent.width; textFormat:Text.PlainText; text:root.qsTransferName; color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.title; font.bold:true; elide:Text.ElideMiddle }
-
-          // The confirmation code the phone shows. `qs` prints it once, on
-          // stderr, in the line it emits while waiting for the other side.
-          Column {
-            visible: root.qsTransferPin !== ""
-            width:parent.width; spacing:Style.space(2)
-            Text { width:parent.width; text:"Confirm this code on " + root.qsTransferPeer; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body; wrapMode:Text.Wrap }
-            Text { width:parent.width; text:root.qsTransferPin; color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.display; font.bold:true }
-          }
-
-          // Ten buckets, not a smooth bar: off a TTY `qs` reports progress
-          // every 10% rather than continuously, so animating between the
-          // steps is the honest way to show it.
-          Rectangle {
-            width:parent.width; height:Style.space(4); radius:height/2; color:Qt.darker(root.foreground,2.2)
-            Rectangle { width:parent.width*Math.max(0,Math.min(1,root.qsProgress)); height:parent.height; radius:height/2; color:root.foreground; Behavior on width { NumberAnimation { duration:220 } } }
-          }
-          Text { text:Math.round(root.qsProgress*100)+"% \u00b7 to "+root.qsTransferPeer; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body }
-          Button {
-            width:parent.width; text:"Cancel"; bordered:true; foreground:root.urgent
-            hasCursor:root.cursorActive&&root.selectedIndex===0
-            onHovered:function(v){root.noteHover(v,0)}; onClicked:root.qsCancel()
-          }
-        }
-
-        Column {
-          visible: root.quickShareMode && (root.qsViewState === "success" || root.qsViewState === "error")
-          width:parent.width; spacing:Style.space(8)
-          Text {
-            width:parent.width; textFormat:Text.PlainText; wrapMode:Text.Wrap
-            text: root.qsViewState === "success" ? "Sent" : root.qsErrorText
-            color: root.qsViewState === "error" ? root.urgent : root.foreground
-            font.family:root.fontFamily; font.pixelSize:Style.font.title; font.bold:true
-          }
-          Text {
-            visible: root.qsViewState === "success" && root.qsTransferPeer !== ""
-            width:parent.width; textFormat:Text.PlainText; text:"to "+root.qsTransferPeer
-            color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body
-          }
-          Button {
-            width:parent.width; text:"Done"; bordered:true; foreground:root.foreground
-            hasCursor:root.cursorActive&&root.selectedIndex===0
-            onHovered:function(v){root.noteHover(v,0)}; onClicked:root.qsFinish()
-          }
-        }
       }
     }
   }
@@ -973,54 +653,4 @@ Panel {
     onExited: function(code) { stdinEnabled=true; if(root.viewState!=="text")return; if(code===0){root.noteTextCopied()} else root.failWith("wl-copy is required to copy received text") }
   }
 
-  // Quick Share's own chooser. Separate from `picker` because the two panes
-  // can each hold a target and neither should be able to hand a path to the
-  // other's engine.
-  Process {
-    id: qsPicker
-    property bool launched: false
-    command: ["omarchy-file-select","--title","Send with Quick Share","--multiple"]
-    running: false
-    stdout: StdioCollector { id: qsPickerOutput; waitForEnd: true }
-    onStarted: qsPicker.launched = true
-    onRunningChanged: if (!running && !qsPicker.launched) { if (root.qs) root.qs.failWith("The file chooser could not be started") }
-    onExited: function(code) {
-      if (code > 1) { if (root.qs) root.qs.failWith("The file chooser did not open"); return }
-      if (code !== 0 || !root.qsSelected) return
-      var paths = String(qsPickerOutput.text || "").split("\n").filter(function(v){ return v.trim() !== "" })
-      if (paths.length && root.qs) root.qs.sendFiles(paths)
-    }
-  }
-
-  // Both of these need a terminal: one runs pacman and cargo, the other runs
-  // ufw, and a password prompt has to land somewhere the user can answer it.
-  // Neither script is ever run with elevated privileges from here.
-  Process {
-    id: depsInstaller
-    command: ["bash","-c","if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then omarchy-launch-floating-terminal-with-presentation \"bash '" + root.qsScriptDirQuoted + "/dependencies.sh' --install\"; else xdg-terminal-exec bash '" + root.qsScriptDirQuoted + "/dependencies.sh' --install; fi"]
-    running: false
-    // The installer runs detached in its own terminal, so this exit says the
-    // launcher returned, not that anything was installed. Re-probing is what
-    // turns the pane back on, and it is cheap.
-    onExited: function(code) { depsRecheck.restart() }
-  }
-  Process {
-    id: firewallSetup
-    command: ["bash","-c","if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then omarchy-launch-floating-terminal-with-presentation \"bash '" + root.qsScriptDirQuoted + "/setup_firewall.sh'\"; else xdg-terminal-exec bash '" + root.qsScriptDirQuoted + "/setup_firewall.sh'; fi"]
-    running: false
-  }
-  // Polls only while the popup is open and only after an install was started,
-  // so a build that takes ten minutes still flips the pane over when it lands.
-  Timer {
-    id: depsRecheck
-    interval: 4000; repeat: true
-    running: false
-    property int ticks: 0
-    onRunningChanged: if (running) ticks = 0
-    onTriggered: {
-      ticks++
-      if (root.qs) root.qs.refreshDependencies()
-      if (root.qsAvailable || ticks > 225) stop()
-    }
-  }
 }

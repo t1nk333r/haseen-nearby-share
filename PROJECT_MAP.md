@@ -9,7 +9,6 @@ Working memory for this plugin. Kept current as work lands.
 | Shell | Quickshell 0.3.1 (Qt 6 / QML) | Omarchy Quattro; plugin loaded by manifest |
 | Frontend | QML + plain ES5 JavaScript | `Model.js` is dependency-free and Node-`require`able |
 | LocalSend engine | Rust (`bin/omarchy-nearby-helper`) | **byte-identical to upstream** — do not modify `backend/` |
-| Quick Share engine | `bin/nearby-qs`, external CLI (GPL-3.0) | short-lived subprocesses; built from a pinned rev, not vendored |
 | Tests | Node built-in `assert` + a `vm` sandbox; bash harnesses | no framework, no package.json |
 | CI | GitHub Actions | Node suites + `cargo fmt/check/test` ×3 |
 
@@ -22,9 +21,8 @@ cargo fmt --manifest-path backend/Cargo.toml --all -- --check
 
 ## [SYSTEM_FLOW]
 
-Two protocols behind one bar widget, selected by two buttons at the top of the
-popup — which are drawn only while the radio probe says the Quick Share half can
-actually run.
+One protocol, LocalSend, behind one bar widget. (The Quick Share pane this fork
+once carried is removed; `tests/qml.test.sh` keeps it from coming back.)
 
 ```
 Bar (one Panel.qml PER MONITOR — view only, owns nothing singular)
@@ -32,17 +30,16 @@ Bar (one Panel.qml PER MONITOR — view only, owns nothing singular)
   ▼
 Service.qml  (one per shell session — owns all engine state and the IPC target,
   │           and publishes itself to Bridge.qml for the bars the shell locks out)
-  ├── LocalSend ── JSON over stdin/stdout ──► bin/omarchy-nearby-helper (Rust)
-  │                 alias supplied via Process.environment HOSTNAME (read at startup only)
-  └── QuickShare.qml ── argv ──► bin/nearby-qs devices|send  (name via `--name`)
+  └── LocalSend ── JSON over stdin/stdout ──► bin/omarchy-nearby-helper (Rust)
+                    alias supplied via Process.environment HOSTNAME (read at startup only)
 ```
 
 User journeys:
 
 1. **Discover + receive (LocalSend)** — receiver runs while enabled; popup open adds
    active discovery; inbound request → accept/decline → progress → done.
-2. **Send (either pane)** — pick device → pick files → progress → done.
-3. **Name this machine** — cog in the LocalSend hero → hostname / generated / custom.
+2. **Send** — pick device → pick files → progress → done.
+3. **Name this machine** — cog in the hero → hostname / generated / custom.
    Changing it bounces the helper, because the alias is read only at startup.
 
 ## [ARCHITECTURE]
@@ -60,17 +57,9 @@ Invariants that govern every change:
   Choke point: `Model.displayName`.
 - **Automatic paths notify; explicit paths act.** No git hook or timer may invoke a
   privileged operation (plan 013).
-- Cursor indices in the LocalSend nearby view run negative: `-3` name cog,
-  `-2` protocol switcher, `-1` receiver toggle, then `0..n` rows. `-2` is only a
-  stop while the switcher is drawn (`qsAvailable`); when it is hidden, the walk
-  steps over the gap and the Quick Share pane's own rows start at 0 either way.
-  `moveCursor`'s clamp, `activateCursor`'s branch, and each row's own `hasCursor`
-  must be changed together.
-- **The Quick Share half gates on capability, never on a flag.** `scripts/dependencies.sh
-  --json` reports a `radio` object beside the dependency list (Bluetooth present and
-  powered; a Wi-Fi interface that is up, with P2P in its phy), and QuickShare.qml makes
-  `available` the conjunction of the two halves. The pane prints the probe's own
-  `reason` sentence, so a radio that is down never reads as "install something".
+- Cursor indices in the nearby view run negative: `-2` name cog, `-1` receiver
+  toggle, then `0..n` rows. `moveCursor`'s clamp, `activateCursor`'s branch, and each
+  row's own `hasCursor` must be changed together.
 - **Settings are read from `~/.config/omarchy/shell.json` and written through
   `shell.updateEntryInline`.** `shell` is `services/PluginShellApi.qml`, the whole
   surface an installed third-party plugin gets: it has **no `shellConfig`**, and
@@ -109,8 +98,8 @@ Tracked but deliberately out of this build's scope, recorded in `plans/README.md
   `persistDeviceName` settings merge, no assertion on `Process.environment`, the
   `device_name` view untested). Not planned — the maintainer scoped this build to bugs
   and security.
-- Plan 007 is PARTIAL: `Model.modeIn` / `Model.quickShareIconFor` are exported but have
-  zero assertions.
-- Plan 008 is PARTIAL: `textFormat` on four bare `Text` elements in `Panel.qml`, the PIN
-  length cap, and routing `QuickShare.noteDevices` through `displayName` remain.
+- Plan 007's remaining gap (`Model.modeIn` / `Model.quickShareIconFor` untested) closed
+  with the Quick Share removal: both functions are gone.
+- Plan 008 is PARTIAL: `textFormat` on four bare `Text` elements in `Panel.qml` and the
+  PIN length cap remain.
 - Plans 001–006, 009–020 remain TODO.

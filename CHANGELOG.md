@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Quick Share is removed; the widget is LocalSend only.** The pane, its
+  mode switcher, the `mode` setting, the `mode`/`localsend`/`quickshare`/
+  `quickshareStatus` IPC verbs, the `qs` build and its receive patch, the radio
+  probe and the `53318/tcp` firewall rule are gone. A `mode` key left in an
+  existing `shell.json` entry is ignored. The device-name cog moves up to cursor
+  row `-2`. `tests/qml.test.sh` fails if a removed file or a Quick Share runtime
+  path comes back.
+
 - **The widget gets its engine under any bar, not only Omarchy's.** A shell
   whose bar is not `omarchy.bar` hands its widgets `pluginShellForBarEntry`, a
   façade of `_summon/_hide/_toggle/_isOpen/_updateSettings` with no
