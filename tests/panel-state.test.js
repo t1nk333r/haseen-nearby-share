@@ -87,7 +87,7 @@ assert.match(source, /text:"Copy link"[^\n]*hasCursor:[^\n]*helperCopyLinkIndex[
 // path has to be one that works from inside the fork.
 assert.doesNotMatch(source, /installerCommand: "[^"]*install\.sh"/,
   "the fork must not send users to upstream's installer to repair the helper")
-assert.match(source, /readonly property string repositoryUrl: "https:\/\/github\.com\/t1nk333r\/omarchy-nearby-share"/,
+assert.match(source, /readonly property string repositoryUrl: "https:\/\/github\.com\/t1nk333r\/haseen-nearby-share"/,
   "the fallback link must point at the repository the installer pulls from")
 assert.equal(source.includes("install.sh"), false,
   "the removed standalone installer must not remain in the panel")
@@ -255,8 +255,8 @@ function panel(initial = {}) {
     copyNote: "",
     helperUpdateOffered: false,
     helperUpdateError: "",
-    updateCommand: "omarchy plugin update t1nk33r.nearby-share",
-    repositoryUrl: "https://github.com/t1nk333r/omarchy-nearby-share",
+    updateCommand: "omarchy plugin update haseen.nearby-share",
+    repositoryUrl: "https://github.com/t1nk333r/haseen-nearby-share",
     pinInput: {text: "", forceActiveFocus: () => {}},
     incomingPinInput: {text: "", forceActiveFocus: () => {}},
     keyCatcher: {forceActiveFocus: () => {}},
@@ -658,5 +658,5 @@ console.log("panel state tests passed")
 // Merge note: upstream's helper-recovery rename (updateCommand / retryHelper /
 // copyUpdateCommand) is adopted, but where upstream and the fork genuinely
 // disagree -- the repository URL and the plugin id in the recovery command --
-// the local fork values (t1nk333r/omarchy-nearby-share, t1nk33r.nearby-share)
+// the local fork values (t1nk333r/haseen-nearby-share, haseen.nearby-share)
 // are kept.

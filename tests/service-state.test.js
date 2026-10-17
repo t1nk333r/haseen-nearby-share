@@ -16,7 +16,7 @@ assert.equal(manifest.entryPoints.service, "Service.qml",
   "the service kind needs an entry point for the shell to load it")
 assert.match(source, /command:\s*\[root\.pluginDir \+ "\/bin\/nearby-helper-launcher"\]/,
   "the helper launcher must be spawned from the service, not from a per-monitor widget")
-assert.match(source, /IpcHandler\s*\{\s*target:\s*"t1nk33r\.nearby-share"/,
+assert.match(source, /IpcHandler\s*\{\s*target:\s*"haseen\.nearby-share"/,
   "the IPC target must be registered once, from the service")
 // The target and the manifest id have to be the same string: the shell routes
 // by manifest id, so a rename that missed one of them would leave the target
@@ -201,8 +201,8 @@ function engine(initial = {}) {
     nameRestart: {restart: () => {}, stop: () => {}},
     // The real config-derived properties. `shell` is the third-party surface
     // from services/PluginShellApi.qml: updateEntryInline and no shellConfig.
-    manifestPluginId: "t1nk33r.nearby-share",
-    configEntry: {id: "t1nk33r.nearby-share", settings: {}, source: "layout", targetSettings: {}},
+    manifestPluginId: "haseen.nearby-share",
+    configEntry: {id: "haseen.nearby-share", settings: {}, source: "layout", targetSettings: {}},
     settingsSource: "layout",
     settingsWritable: true,
     receiverConfigured: true,
@@ -1091,10 +1091,10 @@ for (const busy of ["sending", "receiving", "pin"]) {
 {
   // Replaying the real startup order: the config arrives after the service is
   // built, and a persisted off must never pass through an eligible state.
-  const off = {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share", receiverEnabled: false}]}}, plugins: []}
+  const off = {version: 1, bar: {layout: {right: [{id: "haseen.nearby-share", receiverEnabled: false}]}}, plugins: []}
   const observed = []
   for (const config of [null, {version: 1, bar: {layout: {right: []}}, plugins: []}, off]) {
-    const entry = Model.barEntry(config, "t1nk33r.nearby-share")
+    const entry = Model.barEntry(config, "haseen.nearby-share")
     observed.push(backendEligible({
       receiverConfigured: entry !== null,
       receiverEnabled: Model.receiverEnabledIn(entry),
@@ -1154,7 +1154,7 @@ function hostShell(document) {
 // What the service's bindings do once the host re-pushes barConfig and the
 // FileView reloads: resolve the entry again from the document on disk.
 function reread(state, api) {
-  state.configEntry = Model.barEntry(api.document, "t1nk33r.nearby-share")
+  state.configEntry = Model.barEntry(api.document, "haseen.nearby-share")
   state.receiverConfigured = state.configEntry !== null
   state.settingsSource = state.configEntry ? state.configEntry.source : ""
   state.settingsWritable = Model.entryWritable(state.configEntry)
@@ -1175,18 +1175,18 @@ function nearbyEngine(document, extra = {}) {
   // round trip is the test -- what the plugin reads back has to be what it
   // wrote, whichever entry the host chose to write.
   const {state, api} = nearbyEngine({version: 1,
-    bar: {layout: {right: [{id: "t1nk33r.nearby-share", receiverEnabled: false, tooltip: "keep me"}]}},
-    plugins: [{id: "t1nk33r.nearby-share"}]})
+    bar: {layout: {right: [{id: "haseen.nearby-share", receiverEnabled: false, tooltip: "keep me"}]}},
+    plugins: [{id: "haseen.nearby-share"}]})
   assert.equal(state.settingsSource, "layout",
     "a top-level object entry is what the host writes, even with a marker beside it")
   assert.equal(state.receiverEnabled, false)
 
   assert.equal(state.persistReceiverEnabled(true), true)
-  assert.deepEqual(api.writes, [["t1nk33r.nearby-share", {receiverEnabled: true, tooltip: "keep me"}]],
+  assert.deepEqual(api.writes, [["haseen.nearby-share", {receiverEnabled: true, tooltip: "keep me"}]],
     "toggling persists the entry, unrelated inline settings and all")
   assert.equal(Model.receiverEnabledIn(reread(state, api)), true,
     "and the value read back is the value written")
-  assert.deepEqual(api.document.plugins, [{id: "t1nk33r.nearby-share"}],
+  assert.deepEqual(api.document.plugins, [{id: "haseen.nearby-share"}],
     "the marker the host did not choose is left exactly as it was")
 
   // Idempotent: writing the value that is already there changes nothing.
@@ -1210,15 +1210,15 @@ function nearbyEngine(document, extra = {}) {
   // string to object form through shell.mutateShellConfig(), which shell.qml:654
   // never wires up for a service + bar-widget plugin.
   const {state, api} = nearbyEngine({version: 1,
-    bar: {layout: {right: ["other.before", "t1nk33r.nearby-share", {id: "other.after", x: 1}]}},
-    plugins: [{id: "t1nk33r.nearby-share"}]})
+    bar: {layout: {right: ["other.before", "haseen.nearby-share", {id: "other.after", x: 1}]}},
+    plugins: [{id: "haseen.nearby-share"}]})
   assert.equal(state.settingsSource, "plugins")
 
   assert.equal(state.persistReceiverEnabled(false), true)
   assert.deepEqual(api.document.bar.layout.right,
-    ["other.before", "t1nk33r.nearby-share", {id: "other.after", x: 1}],
+    ["other.before", "haseen.nearby-share", {id: "other.after", x: 1}],
     "persisting must not rewrite the user's layout")
-  assert.deepEqual(api.document.plugins, [{id: "t1nk33r.nearby-share", receiverEnabled: false}])
+  assert.deepEqual(api.document.plugins, [{id: "haseen.nearby-share", receiverEnabled: false}])
   assert.equal(Model.receiverEnabledIn(reread(state, api)), false)
   assert.equal(backendEligible({receiverConfigured: true, receiverEnabled: false, pluginVersion: "1.0.6-dev"}), false)
 
@@ -1233,17 +1233,17 @@ function nearbyEngine(document, extra = {}) {
   // created, never the items[] entry, so the marker is where the round trip
   // has to close.
   const {state, api} = nearbyEngine({version: 1,
-    bar: {layout: {right: [{id: "t1nk33r.nook", items: [{id: "t1nk33r.nearby-share", deviceNameMode: "generated"}]}]}},
-    plugins: [{id: "t1nk33r.nook"}, {id: "t1nk33r.nearby-share"}]})
+    bar: {layout: {right: [{id: "t1nk33r.nook", items: [{id: "haseen.nearby-share", deviceNameMode: "generated"}]}]}},
+    plugins: [{id: "t1nk33r.nook"}, {id: "haseen.nearby-share"}]})
   assert.equal(state.settingsSource, "plugins")
   assert.equal(state.receiverEnabled, true)
   assert.equal(Model.deviceNameModeIn(state.configEntry), "generated",
     "the drawer's items entry still supplies what the marker does not carry")
 
   assert.equal(state.persistReceiverEnabled(false), true)
-  assert.deepEqual(api.document.bar.layout.right[0].items, [{id: "t1nk33r.nearby-share", deviceNameMode: "generated"}],
+  assert.deepEqual(api.document.bar.layout.right[0].items, [{id: "haseen.nearby-share", deviceNameMode: "generated"}],
     "the drawer's contents are not touched, and the setting it declares is not copied out")
-  assert.deepEqual(api.document.plugins[1], {id: "t1nk33r.nearby-share", receiverEnabled: false})
+  assert.deepEqual(api.document.plugins[1], {id: "haseen.nearby-share", receiverEnabled: false})
   const entry = reread(state, api)
   assert.equal(Model.receiverEnabledIn(entry), false)
   assert.equal(Model.deviceNameModeIn(entry), "generated")
@@ -1253,7 +1253,7 @@ function nearbyEngine(document, extra = {}) {
   // Hosted with no marker: there is nothing the host will write, so the plugin
   // has to say so rather than offer a switch that springs back.
   const {state, api} = nearbyEngine({version: 1,
-    bar: {layout: {right: [{id: "t1nk33r.nook", items: [{id: "t1nk33r.nearby-share"}]}]}},
+    bar: {layout: {right: [{id: "t1nk33r.nook", items: [{id: "haseen.nearby-share"}]}]}},
     plugins: [{id: "t1nk33r.nook"}]})
   assert.equal(state.settingsSource, "items")
   assert.equal(state.settingsWritable, false)
@@ -1300,7 +1300,7 @@ assert.match(source,
 {
   const state = engine({receiverEnabled: true, restartingForName: true, shutdownPending: true})
   const writes = []
-  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share"}]}}, plugins: []},
+  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "haseen.nearby-share"}]}}, plugins: []},
                  updateEntryInline: (id, settings) => { writes.push([id, JSON.parse(JSON.stringify(settings))]); return true }}
   state.finishReceiverShutdown()
   assert.equal(state.restartingForName, false, "the rename flag is cleared once the bounce completes")
@@ -1314,7 +1314,7 @@ assert.match(source,
 {
   const state = engine({receiverEnabled: true, restartingForName: false, shutdownPending: true})
   const writes = []
-  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share"}]}}, plugins: []},
+  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "haseen.nearby-share"}]}}, plugins: []},
                  updateEntryInline: (id, settings) => { writes.push([id, JSON.parse(JSON.stringify(settings))]); return true }}
   state.finishReceiverShutdown()
   assert.equal(state.statusText, "Turned off")
@@ -1325,7 +1325,7 @@ assert.match(source,
 {
   const state = engine({})
   const writes = []
-  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share"}]}}, plugins: []},
+  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "haseen.nearby-share"}]}}, plugins: []},
                  updateEntryInline: (id, settings) => { writes.push(JSON.parse(JSON.stringify(settings))); return true }}
   state.persistDeviceName("custom", "My Box")
   assert.equal(writes.length, 1)
@@ -1343,7 +1343,7 @@ assert.match(source,
 {
   const state = engine({})
   const writes = []
-  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "t1nk33r.nearby-share"}]}}, plugins: []},
+  state.shell = {shellConfig: {version: 1, bar: {layout: {right: [{id: "haseen.nearby-share"}]}}, plugins: []},
                  updateEntryInline: (id, settings) => { writes.push(JSON.parse(JSON.stringify(settings))); return true }}
   state.submitCustomName("")
   state.submitCustomName("   ")

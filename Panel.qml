@@ -7,14 +7,14 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "t1nk33r.nearby-share"
-  // The `t1nk33r.nearby-share` IPC target belongs to the service, which exists
+  moduleName: "haseen.nearby-share"
+  // The `haseen.nearby-share` IPC target belongs to the service, which exists
   // once. A widget registering it would register it once per monitor.
   manageIpc: false
 
   // The host may replace moduleName with an instance id. Keep the manifest id
   // stable for registry lookups and filesystem paths.
-  readonly property string manifestPluginId: "t1nk33r.nearby-share"
+  readonly property string manifestPluginId: "haseen.nearby-share"
 
   // The bar builds one of these per monitor, so this file owns no helper, no
   // transfer state, and no IPC target. All of that lives in the `service`
@@ -76,8 +76,8 @@ Panel {
 
   // Shown only when helper recovery fails, so the user can refresh the tracked
   // plugin source through Omarchy or inspect its repository.
-  readonly property string repositoryUrl: "https://github.com/t1nk333r/omarchy-nearby-share" // fork URL kept over upstream's
-  readonly property string updateCommand: "omarchy plugin update t1nk33r.nearby-share" // fork plugin id kept over upstream's
+  readonly property string repositoryUrl: "https://github.com/t1nk333r/haseen-nearby-share" // fork URL kept over upstream's
+  readonly property string updateCommand: "omarchy plugin update haseen.nearby-share" // fork plugin id kept over upstream's
 
   // The update row sits after the devices and compact action row. If updating
   // fails, its two recovery actions follow it in keyboard order.

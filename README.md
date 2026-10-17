@@ -1,7 +1,10 @@
 # Nearby Share
 
-Send and receive files and clipboard text with LocalSend, from one Omarchy
-panel.
+A [haseen](https://github.com/t1nk333r/haseen) plugin (also runs on Omarchy):
+send and receive files and clipboard text with LocalSend, from one bar panel.
+
+Plugin id: `haseen.nearby-share`. It was `t1nk33r.nearby-share` before 1.2.1;
+see the changelog for moving an existing install over.
 
 > **This is a fork.** The LocalSend engine, the Rust helper and the panel it
 > lives in are [jfg96/omarchy-nearby](https://github.com/jfg96/omarchy-nearby)
@@ -28,12 +31,20 @@ gone: the widget is LocalSend only.
 
 ## Install
 
+On [haseen](https://github.com/t1nk333r/haseen):
+
+```bash
+haseen plugin install https://github.com/t1nk333r/haseen-nearby-share --enable
+```
+
+Also runs on Omarchy:
+
 ```sh
-git clone https://github.com/t1nk333r/omarchy-nearby-share.git \
-  ~/.config/omarchy/plugins/t1nk33r.nearby-share
-cd ~/.config/omarchy/plugins/t1nk33r.nearby-share
+git clone https://github.com/t1nk333r/haseen-nearby-share.git \
+  ~/.config/omarchy/plugins/haseen.nearby-share
+cd ~/.config/omarchy/plugins/haseen.nearby-share
 ./scripts/setup.sh          # hooks + dependencies
-omarchy plugin enable t1nk33r.nearby-share
+omarchy plugin enable haseen.nearby-share
 ```
 
 `setup.sh` points `core.hooksPath` at the tracked `.githooks` directory, which
@@ -66,10 +77,10 @@ installs it.
 ## IPC
 
 ```sh
-omarchy-shell t1nk33r.nearby-share receiverOn    # also receiverOff, receiverToggle
-omarchy-shell t1nk33r.nearby-share name          # the name this machine advertises
-omarchy-shell t1nk33r.nearby-share status        # LocalSend engine
-omarchy-shell t1nk33r.nearby-share configProbe   # where the settings came from
+omarchy-shell haseen.nearby-share receiverOn    # also receiverOff, receiverToggle
+omarchy-shell haseen.nearby-share name          # the name this machine advertises
+omarchy-shell haseen.nearby-share status        # LocalSend engine
+omarchy-shell haseen.nearby-share configProbe   # where the settings came from
 ```
 
 `status` reports `configured` beside `enabled`: a receiver that is off because

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Renamed to `haseen.nearby-share`, a haseen plugin that also runs on
+  Omarchy.** The plugin id, the IPC target (`omarchy-shell haseen.nearby-share
+  …`) and the install directory all change; the repository is
+  `t1nk333r/haseen-nearby-share`. The helper, its cache under
+  `~/.local/share/omarchy-nearby` and the PIN in `~/.local/state/omarchy-nearby`
+  keep their upstream names and carry over untouched. To move an existing
+  Omarchy install: rename `~/.config/omarchy/plugins/t1nk33r.nearby-share` to
+  `haseen.nearby-share`, then change the id in `shell.json` (its `bar.layout`
+  entry and its `plugins[]` marker) — the receiver and device-name settings come
+  along with the entry.
+
 - **Quick Share is removed; the widget is LocalSend only.** The pane, its
   mode switcher, the `mode` setting, the `mode`/`localsend`/`quickshare`/
   `quickshareStatus` IPC verbs, the `qs` build and its receive patch, the radio

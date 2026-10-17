@@ -1,9 +1,9 @@
-# UPSTREAM — `t1nk33r.nearby-share`
+# UPSTREAM — `haseen.nearby-share`
 
-- **plugin id**: `t1nk33r.nearby-share`
+- **plugin id**: `haseen.nearby-share` (renamed from `t1nk33r.nearby-share` on 2026-10-17, with the haseen rebrand)
 - **plugin version**: `1.1.3`
 - **`omarchy.clonedFrom`**: absent by design — the host's disable branch rewrites the bar entry to the declared id, and `oma.nearby` is not installed here (key dropped 2026-09-11; see `plans/notes/119-clonedfrom-hazard.md`)
-- **ownership**: cloned into `~/.config/omarchy/plugins/t1nk33r.nearby-share` by `omarchy plugin add` (row in `packages/omarchy-plugins.txt`); its own git repo — **fork repo (origin)**: `git@github.com:t1nk333r/omarchy-nearby-share.git`
+- **ownership**: `~/.config/omarchy/plugins/haseen.nearby-share`, an owner fork: its working files are yadm-tracked, its own git repo stays on disk — **fork repo (origin)**: `git@github.com:t1nk333r/haseen-nearby-share.git` (formerly `omarchy-nearby-share`)
 - **upstream repo**: `https://github.com/jfg96/omarchy-nearby.git`
 - **tracking branch**: `main` (local HEAD `24308ad9d3b0`)
 - **last-synced upstream commit**: `4b695554bc8105706ec8bd2d4a988be2d3b1c4b4` — pinned by `tools/plugin-upstream-report.sh` as `refs/upstream/main` (plan 119 §3)

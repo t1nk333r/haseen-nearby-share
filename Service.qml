@@ -24,7 +24,7 @@ Item {
   property var manifest: null
   property string omarchyPath: Quickshell.env("OMARCHY_PATH") || ""
 
-  readonly property string manifestPluginId: "t1nk33r.nearby-share"
+  readonly property string manifestPluginId: "haseen.nearby-share"
   readonly property string metadataSourceDir: manifest && manifest.__sourceDir
     ? String(manifest.__sourceDir)
     : ""
@@ -308,7 +308,7 @@ Item {
   }
 
   IpcHandler {
-    target: "t1nk33r.nearby-share"
+    target: "haseen.nearby-share"
     function open(): string { return root.summonView("summon") }
     function close(): string { return root.summonView("hide") }
     function toggle(): string { return root.summonView("toggle") }

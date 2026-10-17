@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "id": "t1nk33r.nearby-share",
+  "id": "haseen.nearby-share",
   "name": "Nearby Share",
   "version": "1.2.1-dev",
   "minHelperVersion": "1.2.0",
   "author": "t1nk33r",
   "description": "Send and receive with LocalSend",
-  "homepage": "https://github.com/jfg96/omarchy-nearby",
+  "homepage": "https://github.com/t1nk333r/haseen-nearby-share",
   "kinds": [
     "service",
     "bar-widget"

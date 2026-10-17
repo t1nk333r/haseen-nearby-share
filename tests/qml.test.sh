@@ -42,7 +42,7 @@ jq -e '.entryPoints.barWidget == "Panel.qml"' "$ROOT_DIR/manifest.json" >/dev/nu
 
 # The IPC target and the helper live on the service: it is loaded once per
 # session, whereas the bar widget is built once per monitor.
-grep -q 'target: "t1nk33r.nearby-share"' "$ROOT_DIR/Service.qml" \
+grep -q 'target: "haseen.nearby-share"' "$ROOT_DIR/Service.qml" \
   || fail "IpcHandler target does not match the plugin id"
 grep -q 'manageIpc: false' "$ROOT_DIR/Panel.qml" \
   || fail "the bar widget must not register the service's IPC target"

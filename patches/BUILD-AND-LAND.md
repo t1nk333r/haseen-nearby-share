@@ -104,7 +104,7 @@ invokes it, which is why the defect needed a person to trigger it.
 
 ```sh
 # Requires network access for ~139 crates. Ask the owner first.
-cd ~/.config/omarchy/plugins/t1nk33r.nearby-share
+cd ~/.config/omarchy/plugins/haseen.nearby-share
 git apply -p1 /tmp/nearby-rust-patch/nearby-helper-version-and-safe-diagnostics.patch
 CARGO_TARGET_DIR=/tmp/nearby-rust-target cargo build --release --locked --manifest-path backend/Cargo.toml
 cargo test --locked --manifest-path backend/Cargo.toml
@@ -122,7 +122,7 @@ coredumpctl list --since "$stamp" || echo "no coredumps"
 cp -a bin/omarchy-nearby-helper /tmp/nearby-backup/omarchy-nearby-helper.$(date +%Y%m%dT%H%M%S)
 install -Dm755 /tmp/nearby-rust-target/release/omarchy-nearby-helper bin/omarchy-nearby-helper
 omarchy-restart-shell
-omarchy-shell t1nk33r.nearby-share status   # expect ready:true, helper:"1.1.1"
+omarchy-shell haseen.nearby-share status   # expect ready:true, helper:"1.1.1"
 ```
 
 `bin/` is untracked (`.gitignore`), so replacing the binary is not a source
