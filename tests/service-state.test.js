@@ -1541,7 +1541,11 @@ function liveOwner(calls) {
 
 for (const file of ["../Service.qml", "../QuickShare.qml"]) {
   const text = fs.readFileSync(require.resolve(file), "utf8")
-  assert.match(text, /property bool tearingDown: false\s*\n\s*Component\.onDestruction: tearingDown = true/,
+  // `tearingDown` has to be the first thing the handler does, whether the
+  // handler is one statement or a block: the service clears its Bridge
+  // registration in the same handler, and that must not run before the flag
+  // the children check.
+  assert.match(text, /property bool tearingDown: false\s*\n\s*Component\.onDestruction:\s*\{?\s*\n?\s*tearingDown = true/,
     `${file} must mark itself as tearing down before its children are deleted`)
 
   const handlers = handlerBodies(text)

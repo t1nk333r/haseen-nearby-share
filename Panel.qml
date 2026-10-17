@@ -20,9 +20,20 @@ Panel {
   // transfer state, and no IPC target. All of that lives in the `service`
   // entry point, which the shell loads exactly once; everything below is a
   // view onto it plus this popup's own cursor. See Service.qml.
-  readonly property var engine: bar && bar.shell && typeof bar.shell.serviceFor === "function"
-    ? bar.shell.serviceFor(manifestPluginId)
-    : null
+  // The engine, through whichever door this host can open. Omarchy's own bar
+  // hands a registered widget a service-capable façade; a replacement bar gets
+  // `pluginShellForBarEntry`, which has no service lookup at all, so the shell
+  // is asked first and Bridge.qml answers when it cannot. The service publishes
+  // itself there, so the view is never left without its engine - which is what
+  // a widget with no engine looks like from the outside: icon painting the
+  // "turned off" colour over a receiver that is running, and a popup that can
+  // start nothing. See Bridge.qml.
+  readonly property var engine: {
+    var viaShell = bar && bar.shell && typeof bar.shell.serviceFor === "function"
+      ? bar.shell.serviceFor(manifestPluginId)
+      : null
+    return viaShell || Bridge.service
+  }
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent

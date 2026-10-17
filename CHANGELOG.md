@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **The widget gets its engine under any bar, not only Omarchy's.** A shell
+  whose bar is not `omarchy.bar` hands its widgets `pluginShellForBarEntry`, a
+  façade of `_summon/_hide/_toggle/_isOpen/_updateSettings` with no
+  `_serviceLookup`, while `Bar.qml` reserves the service-capable façade for the
+  bar it ships. `bar.shell.serviceFor()` is therefore null *by construction*
+  there, however often it is asked — on a machine running a replacement bar the
+  icon painted the "turned off" colour over a receiver that was running, and the
+  popup could start nothing. The service now publishes itself to `Bridge.qml`, a
+  singleton both halves import and one instance per engine, and the view prefers
+  the shell's lookup when it answers. One engine, two doors, no second copy of
+  anything; `tests/qml.test.sh` fails if either half's end of it goes missing.
+
 - **The Quick Share pane can no longer trap the popup.** The mode switcher is
   hidden while the engine cannot run, and only the Quick Share pane's columns
   are drawn in that state, so a machine whose Wi-Fi radio is down — or whose CLI

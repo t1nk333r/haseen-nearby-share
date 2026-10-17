@@ -207,7 +207,18 @@ Item {
   // is still callable first. This is the QuickShare.qml:172 crash, in the two
   // files that have the shape.
   property bool tearingDown: false
-  Component.onDestruction: tearingDown = true
+  Component.onDestruction: {
+    tearingDown = true
+    // A rebuild must not clear the registration the newer instance just made.
+    if (Bridge.service === root) Bridge.service = null
+  }
+
+  // The view's own door to this object, for the bars the shell will not let it
+  // ask: a replacement bar hands its widgets a façade with no service lookup,
+  // so `bar.shell.serviceFor()` is null there no matter how long the view
+  // waits. Panel.qml prefers that lookup when it answers and falls back to this
+  // - one engine, two doors, and no second copy of anything.
+  Component.onCompleted: Bridge.service = root
 
   // /proc, not `hostname` -- no subprocess, and it is always readable.
   FileView {

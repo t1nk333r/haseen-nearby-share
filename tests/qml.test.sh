@@ -46,6 +46,24 @@ for forbidden in shellConfig mutateShellConfig; do
 done
 grep -q 'shell\.updateEntryInline' "$ROOT_DIR/Service.qml" \
   || fail "settings must be written through the sanctioned per-entry writer"
+# The view's engine cannot come from the shell alone. `serviceFor()` answers on
+# Omarchy's own bar, which hands a registered widget a service-capable facade;
+# a replacement bar is handed `pluginShellForBarEntry` instead, which has no
+# `_serviceLookup` at all, so the lookup is null by construction for the whole
+# session - the icon paints the "turned off" colour over a receiver that is
+# running, and nothing in the popup can start it. This is not hypothetical: it
+# is what the bar on this machine did until Bridge.qml existed. So the plugin
+# carries its own door, and these hold it open.
+grep -q '^singleton Bridge 1\.0 Bridge\.qml$' "$ROOT_DIR/qmldir" \
+  || fail "qmldir must declare the Bridge singleton the two halves share"
+grep -q '^pragma Singleton$' "$ROOT_DIR/Bridge.qml" \
+  || fail "Bridge.qml must be a singleton: a per-importer copy would leave the view without an engine again"
+grep -q 'Component\.onCompleted: Bridge\.service = root' "$ROOT_DIR/Service.qml" \
+  || fail "the service must publish itself to Bridge.qml for the bars the shell will not let the view ask"
+grep -q 'if (Bridge\.service === root) Bridge\.service = null' "$ROOT_DIR/Service.qml" \
+  || fail "a rebuild must not clear the registration the newer service has already made"
+grep -q 'viaShell || Bridge\.service' "$ROOT_DIR/Panel.qml" \
+  || fail "the view must fall back to Bridge.qml when the host has no service lookup; see Bridge.qml"
 for kind in $(jq -r '.kinds[]' "$ROOT_DIR/manifest.json"); do
   [[ $kind != bar ]] || fail "this plugin does not implement a full bar; mutateShellConfig assumptions changed"
 done
@@ -55,6 +73,9 @@ done
 if [[ -x $QMLLINT_BIN && -d $OMARCHY_SOURCE/shell/Commons ]]; then
   mkdir -p -- "$TMP/lint/qs"
   cp -- "$ROOT_DIR/Model.js" "$TMP/lint/"
+  # Bridge.qml and its qmldir travel with the two files that import the
+  # singleton, or qmllint reports "Bridge is not a type" for both.
+  cp -- "$ROOT_DIR/Bridge.qml" "$ROOT_DIR/qmldir" "$TMP/lint/"
   for file in "${QML_FILES[@]}"; do cp -- "$ROOT_DIR/$file" "$TMP/lint/"; done
   ln -s -- "$OMARCHY_SOURCE/shell/Commons" "$TMP/lint/qs/Commons"
   ln -s -- "$OMARCHY_SOURCE/shell/Ui" "$TMP/lint/qs/Ui"

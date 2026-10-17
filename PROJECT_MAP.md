@@ -28,9 +28,10 @@ actually run.
 
 ```
 Bar (one Panel.qml PER MONITOR — view only, owns nothing singular)
-  │  reads state, calls methods
+  │  reads state, calls methods — engine from `bar.shell.serviceFor()`, else Bridge.qml
   ▼
-Service.qml  (one per shell session — owns all engine state and the IPC target)
+Service.qml  (one per shell session — owns all engine state and the IPC target,
+  │           and publishes itself to Bridge.qml for the bars the shell locks out)
   ├── LocalSend ── JSON over stdin/stdout ──► bin/omarchy-nearby-helper (Rust)
   │                 alias supplied via Process.environment HOSTNAME (read at startup only)
   └── QuickShare.qml ── argv ──► bin/nearby-qs devices|send  (name via `--name`)
@@ -81,6 +82,15 @@ Invariants that govern every change:
   `updateEntryInline()` searches them (top-level `bar.layout` object entry, else the
   `plugins[]` marker, else a drawer's `items[]`), which is what makes a write
   readable back. `tests/qml.test.sh` fails the build if either dead API returns.
+- **The view reaches the engine through either door.** `bar.shell.serviceFor()` answers
+  only under Omarchy's own bar: `Bar.qml`'s service-capable façade is reserved for the bar
+  the shell ships, and a replacement bar's widgets are handed `pluginShellForBarEntry`,
+  which has no `_serviceLookup` at all — so that lookup is null *by construction* for the
+  life of the session, not late. `Bridge.qml` is the plugin's own door: a QML singleton
+  both halves import (one instance per engine), which the service publishes itself into
+  on completion and clears on destruction, guarded so a rebuild cannot clear the newer
+  instance. `Panel.qml` prefers the shell lookup and falls back to it.
+  `tests/qml.test.sh` fails if either end goes missing.
 - **Nothing calls into the engine from a handler that can outlive it.** A `shell.json`
   write rebuilds the plugin tree, so a `Process` or `FileView` handler can fire after
   its parent's QML metaobject is gone, where a function on the parent reads
