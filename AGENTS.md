@@ -41,6 +41,7 @@ passing.
   then commit its exact release metadata. Repository-only documentation or CI
   changes that cannot alter the installed plugin do not require a version bump.
 - Never create or move a release tag until the exact target commit has passed
-  CI. Release helpers must come from the tagged GitHub Actions workflow, not a
+  CI — the full run on `main`; a pull request's run covers only what its diff
+  touches. Release helpers must come from the tagged GitHub Actions workflow, not a
   locally built binary. Helper releases stay prereleases so they cannot replace
   the latest stable plugin release in GitHub's default release view.
