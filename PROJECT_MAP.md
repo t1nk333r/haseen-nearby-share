@@ -10,7 +10,7 @@ Working memory for this plugin. Kept current as work lands.
 | Frontend | QML + plain ES5 JavaScript | `Model.js` is dependency-free and Node-`require`able |
 | LocalSend engine | Rust (`bin/omarchy-nearby-helper`) | **byte-identical to upstream** — do not modify `backend/` |
 | Tests | Node built-in `assert` + a `vm` sandbox; bash harnesses | no framework, no package.json |
-| CI | GitHub Actions | Node suites + `cargo fmt/check/test` ×3 |
+| CI | GitHub Actions | Node suites + `cargo fmt/check/test` ×3 — a pull request runs the half its diff touches (frontend/backend), a push to `main` runs all |
 
 Verification gates (all must pass):
 
